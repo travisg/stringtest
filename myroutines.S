@@ -8,6 +8,8 @@
 
 #ifdef __x86_64__
 
+// ERMS versions of memcpy/memset for x86
+
 // %rax = memcpy(%rdi, %rsi, %rdx)
 FUNCTION(mymemcpy)
     // Save return value.

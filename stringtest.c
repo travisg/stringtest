@@ -17,26 +17,11 @@ static uint8_t *src2;
 static uint8_t *dst2;
 
 // large buffer to blow out the L3 cache
+static size_t MAX_BUFFER_SIZE = 16*1024*1024;
 
-//static size_t BUFFER_SIZE = 16*1024*1024;
-static size_t BUFFER_SIZE = 256*1024;
-
-#define ITERATIONS (1024*1024*1024 / BUFFER_SIZE) // enough iterations to have to copy/set 1GB
-
-#if 0
-static inline void *mymemcpy(void *dst, const void *src, size_t len) { return memcpy(dst, src, len); }
-static inline void *mymemset(void *dst, int c, size_t len) { return memset(dst, c, len); }
-#else
 // if we're testing our own memcpy, use this
 extern void *mymemcpy(void *dst, const void *src, size_t len);
 extern void *mymemset(void *dst, int c, size_t len);
-#endif
-
-/* reference implementations of memmove/memcpy */
-typedef long word;
-
-#define lsize sizeof(word)
-#define lmask (lsize - 1)
 
 #ifdef __APPLE__
 #include <mach/mach_time.h>
@@ -62,6 +47,16 @@ static uint64_t current_time()
 #error need a way to get ns time
 
 #endif
+
+static inline size_t iterations(size_t buffer_size) {
+    return (1024*1024*1024 / buffer_size); // enough iterations to have to copy/set 1GB
+}
+
+/* reference implementations of memmove/memcpy */
+typedef long word;
+
+#define lsize sizeof(word)
+#define lmask (lsize - 1)
 
 static void *c_memmove(void *dest, void const *src, size_t count)
 {
@@ -156,14 +151,14 @@ static void *null_memcpy(void *dst, const void *src, size_t len)
 }
 
 __attribute__((noinline))
-static uint64_t bench_memcpy_routine(void *memcpy_routine(void *, const void *, size_t), size_t srcalign, size_t dstalign)
+static uint64_t bench_memcpy_routine(void *memcpy_routine(void *, const void *, size_t), size_t srcalign, size_t dstalign, size_t buffer_size)
 {
     int i;
     uint64_t t0;
 
     t0 = current_time();
-    for (i=0; i < ITERATIONS; i++) {
-        memcpy_routine(dst + dstalign, src + srcalign, BUFFER_SIZE);
+    for (i=0; i < iterations(buffer_size); i++) {
+        memcpy_routine(dst + dstalign, src + srcalign, buffer_size);
     }
     return current_time() - t0;
 }
@@ -175,21 +170,19 @@ static void bench_memcpy(void)
 
     printf("memcpy speed test\n");
 
+    size_t buffer_size = 256*1024;
     for (srcalign = 0; srcalign <= 64; ) {
         for (dstalign = 0; dstalign <= 64; ) {
-
-            //null = bench_memcpy_routine(&null_memcpy, srcalign, dstalign);
-            c = bench_memcpy_routine(&c_memmove, srcalign, dstalign);
-            libc = bench_memcpy_routine(&memcpy, srcalign, dstalign);
-            mine = bench_memcpy_routine(&mymemcpy, srcalign, dstalign);
+            c = bench_memcpy_routine(&c_memmove, srcalign, dstalign, buffer_size);
+            libc = bench_memcpy_routine(&memcpy, srcalign, dstalign, buffer_size);
+            mine = bench_memcpy_routine(&mymemcpy, srcalign, dstalign, buffer_size);
 
             //printf("null %llu c %llu libc %llu mine %llu\n", null, c, libc, mine);
 
             printf("srcalign %2zu, dstalign %2zu: ", srcalign, dstalign);
-            //printf("null %5" PRIu64 "; ", null);
-            printf("c %10" PRIu64 " %12llu bps; ", c, (uint64_t)BUFFER_SIZE * ITERATIONS * 1000000000ULL / c);
-            printf("libc %10" PRIu64 " %12llu bps; ", libc, (uint64_t)BUFFER_SIZE * ITERATIONS * 1000000000ULL / libc);
-            printf("my %10" PRIu64 " %12llu bps ", mine, (uint64_t)BUFFER_SIZE * ITERATIONS * 1000000000ULL / mine);
+            printf("c %10" PRIu64 " %12llu bps; ", c, (uint64_t)buffer_size * iterations(buffer_size) * 1000000000ULL / c);
+            printf("libc %10" PRIu64 " %12llu bps; ", libc, (uint64_t)buffer_size * iterations(buffer_size) * 1000000000ULL / libc);
+            printf("my %10" PRIu64 " %12llu bps ", mine, (uint64_t)buffer_size * iterations(buffer_size) * 1000000000ULL / mine);
             printf("\n");
 
             if (dstalign < 8)
@@ -257,7 +250,7 @@ static uint64_t bench_memset_routine(void *memset_routine(void *, int, size_t), 
     uint64_t t0;
 
     t0 = current_time();
-    for (i=0; i < ITERATIONS; i++) {
+    for (i=0; i < iterations(len); i++) {
         memset_routine(dst + dstalign, 0, len);
     }
     return current_time() - t0;
@@ -270,16 +263,17 @@ static void bench_memset(void)
 
     printf("memset speed test\n");
 
+    size_t buffer_size = 256*1024;
     for (dstalign = 0; dstalign < 64; dstalign++) {
 
-        c = bench_memset_routine(&c_memset, dstalign, BUFFER_SIZE);
-        libc = bench_memset_routine(&memset, dstalign, BUFFER_SIZE);
-        mine = bench_memset_routine(&mymemset, dstalign, BUFFER_SIZE);
+        c = bench_memset_routine(&c_memset, dstalign, buffer_size);
+        libc = bench_memset_routine(&memset, dstalign, buffer_size);
+        mine = bench_memset_routine(&mymemset, dstalign, buffer_size);
 
-        printf("dstalign %zu: ", dstalign);
-        printf("c memset %10" PRIu64 " %12llu bps; ", c, (uint64_t)BUFFER_SIZE * ITERATIONS * 1000000000ULL / c);
-        printf("libc memset %10" PRIu64 " %12llu bps; ", libc, (uint64_t)BUFFER_SIZE * ITERATIONS * 1000000000ULL / libc);
-        printf("my memset %10" PRIu64 " %12llu bps; ", mine, (uint64_t)BUFFER_SIZE * ITERATIONS * 1000000000ULL / mine);
+        printf("dstalign %2zu: ", dstalign);
+        printf("c memset %10" PRIu64 " %12llu bps; ", c, (uint64_t)buffer_size * iterations(buffer_size) * 1000000000ULL / c);
+        printf("libc memset %10" PRIu64 " %12llu bps; ", libc, (uint64_t)buffer_size * iterations(buffer_size) * 1000000000ULL / libc);
+        printf("my memset %10" PRIu64 " %12llu bps; ", mine, (uint64_t)buffer_size * iterations(buffer_size) * 1000000000ULL / mine);
         printf("\n");
     }
 }
@@ -313,72 +307,12 @@ static void validate_memset(void)
     }
 }
 
-#if defined(WITH_LIB_CONSOLE)
-#include <lib/console.h>
-
-static int string_tests(int argc, const cmd_args *argv, uint32_t flags)
-{
-    src = memalign(64, BUFFER_SIZE + 256);
-    dst = memalign(64, BUFFER_SIZE + 256);
-    src2 = memalign(64, BUFFER_SIZE + 256);
-    dst2 = memalign(64, BUFFER_SIZE + 256);
-
-    printf("src %p, dst %p\n", src, dst);
-    printf("src2 %p, dst2 %p\n", src2, dst2);
-
-    if (!src || !dst || !src2 || !dst2) {
-        printf("failed to allocate all the buffers\n");
-        goto out;
-    }
-
-    if (argc < 3) {
-        printf("not enough arguments:\n");
-usage:
-        printf("%s validate <routine>\n", argv[0].str);
-        printf("%s bench <routine>\n", argv[0].str);
-        goto out;
-    }
-
-    if (!strcmp(argv[1].str, "validate")) {
-        if (!strcmp(argv[2].str, "memcpy")) {
-            validate_memcpy();
-        } else if (!strcmp(argv[2].str, "memset")) {
-            validate_memset();
-        }
-    } else if (!strcmp(argv[1].str, "bench")) {
-        if (!strcmp(argv[2].str, "memcpy")) {
-            bench_memcpy();
-        } else if (!strcmp(argv[2].str, "memset")) {
-            bench_memset();
-        }
-    } else {
-        goto usage;
-    }
-
-out:
-    free(src);
-    free(dst);
-    free(src2);
-    free(dst2);
-
-    return 0;
-}
-
-STATIC_COMMAND_START
-STATIC_COMMAND("string", "memcpy tests", &string_tests)
-STATIC_COMMAND_END(stringtests);
-
-APP_START(stringtests)
-APP_END
-
-#endif
-
 int main(int argc, char *argv[]) {
     int err = 0;
-    err |= posix_memalign((void **)&src, 64, BUFFER_SIZE + 256);
-    err |= posix_memalign((void **)&dst, 64, BUFFER_SIZE + 256);
-    err |= posix_memalign((void **)&src2, 64, BUFFER_SIZE + 256);
-    err |= posix_memalign((void **)&dst2, 64, BUFFER_SIZE + 256);
+    err |= posix_memalign((void **)&src, 64, MAX_BUFFER_SIZE + 256);
+    err |= posix_memalign((void **)&dst, 64, MAX_BUFFER_SIZE + 256);
+    err |= posix_memalign((void **)&src2, 64, MAX_BUFFER_SIZE + 256);
+    err |= posix_memalign((void **)&dst2, 64, MAX_BUFFER_SIZE + 256);
     if (err)
         return 1;
 
