@@ -145,6 +145,23 @@ static void *c_memset(void *s, int c, size_t count)
     return s;
 }
 
+static const char *format_bps(size_t size, uint64_t time) {
+    static char cbuf[64];
+
+    uint64_t total = (uint64_t)size * iterations(size) * 1000000000 / time;
+    if (total > 1000000000) { // GB
+        total /= 1000000;
+        snprintf(cbuf, sizeof(cbuf), "%12" PRIu64 " MBps", total);
+    } else if (total > 1000000) { // MB
+        total /= 1000;
+        snprintf(cbuf, sizeof(cbuf), "%12" PRIu64 " KBps", total);
+    } else {
+        snprintf(cbuf, sizeof(cbuf), "%12" PRIu64 " Bps", total);
+    }
+
+    return cbuf;
+}
+
 static void *null_memcpy(void *dst, const void *src, size_t len)
 {
     return dst;
@@ -170,31 +187,35 @@ static void bench_memcpy(void)
 
     printf("memcpy speed test\n");
 
-    size_t buffer_size = 256*1024;
-    for (srcalign = 0; srcalign <= 64; ) {
-        for (dstalign = 0; dstalign <= 64; ) {
-            c = bench_memcpy_routine(&c_memmove, srcalign, dstalign, buffer_size);
-            libc = bench_memcpy_routine(&memcpy, srcalign, dstalign, buffer_size);
-            mine = bench_memcpy_routine(&mymemcpy, srcalign, dstalign, buffer_size);
+    size_t buffer_size = 4*1024;
+    do {
+        printf("buffer size %zu\n", buffer_size);
+        for (srcalign = 0; srcalign <= 64; ) {
+            for (dstalign = 0; dstalign <= 64; ) {
+                c = bench_memcpy_routine(&c_memmove, srcalign, dstalign, buffer_size);
+                libc = bench_memcpy_routine(&memcpy, srcalign, dstalign, buffer_size);
+                mine = bench_memcpy_routine(&mymemcpy, srcalign, dstalign, buffer_size);
 
-            //printf("null %llu c %llu libc %llu mine %llu\n", null, c, libc, mine);
+                //printf("null %llu c %llu libc %llu mine %llu\n", null, c, libc, mine);
 
-            printf("srcalign %2zu, dstalign %2zu: ", srcalign, dstalign);
-            printf("c %10" PRIu64 " %12llu bps; ", c, (uint64_t)buffer_size * iterations(buffer_size) * 1000000000ULL / c);
-            printf("libc %10" PRIu64 " %12llu bps; ", libc, (uint64_t)buffer_size * iterations(buffer_size) * 1000000000ULL / libc);
-            printf("my %10" PRIu64 " %12llu bps ", mine, (uint64_t)buffer_size * iterations(buffer_size) * 1000000000ULL / mine);
-            printf("\n");
+                printf("srcalign %2zu, dstalign %2zu: ", srcalign, dstalign);
+                printf("c %10" PRIu64 " %s; ", c, format_bps(buffer_size, c));
+                printf("libc %10" PRIu64 " %s; ", libc, format_bps(buffer_size, libc));
+                printf("asm %10" PRIu64 " %s", mine, format_bps(buffer_size, mine));
+                printf("\n");
 
-            if (dstalign < 8)
-                dstalign++;
+                if (dstalign < 8)
+                    dstalign++;
+                else
+                    dstalign <<= 1;
+            }
+            if (srcalign < 8)
+                srcalign++;
             else
-                dstalign <<= 1;
+                srcalign <<= 1;
         }
-        if (srcalign < 8)
-            srcalign++;
-        else
-            srcalign <<= 1;
-    }
+        buffer_size *= 4;
+    } while (buffer_size <= MAX_BUFFER_SIZE);
 }
 
 static void fillbuf(void *ptr, size_t len, uint32_t seed)
@@ -263,19 +284,23 @@ static void bench_memset(void)
 
     printf("memset speed test\n");
 
-    size_t buffer_size = 256*1024;
-    for (dstalign = 0; dstalign < 64; dstalign++) {
+    size_t buffer_size = 4*1024;
+    do {
+        printf("buffer size %zu\n", buffer_size);
+        for (dstalign = 0; dstalign < 64; dstalign++) {
 
-        c = bench_memset_routine(&c_memset, dstalign, buffer_size);
-        libc = bench_memset_routine(&memset, dstalign, buffer_size);
-        mine = bench_memset_routine(&mymemset, dstalign, buffer_size);
+            c = bench_memset_routine(&c_memset, dstalign, buffer_size);
+            libc = bench_memset_routine(&memset, dstalign, buffer_size);
+            mine = bench_memset_routine(&mymemset, dstalign, buffer_size);
 
-        printf("dstalign %2zu: ", dstalign);
-        printf("c memset %10" PRIu64 " %12llu bps; ", c, (uint64_t)buffer_size * iterations(buffer_size) * 1000000000ULL / c);
-        printf("libc memset %10" PRIu64 " %12llu bps; ", libc, (uint64_t)buffer_size * iterations(buffer_size) * 1000000000ULL / libc);
-        printf("my memset %10" PRIu64 " %12llu bps; ", mine, (uint64_t)buffer_size * iterations(buffer_size) * 1000000000ULL / mine);
-        printf("\n");
-    }
+            printf("dstalign %2zu: ", dstalign);
+            printf("c memset %10" PRIu64 " %s; ", c, format_bps(buffer_size, c));
+            printf("libc memset %10" PRIu64 " %s; ", libc, format_bps(buffer_size, libc));
+            printf("asm memset %10" PRIu64 " %s; ", mine, format_bps(buffer_size, mine));
+            printf("\n");
+        }
+        buffer_size *= 4;
+    } while (buffer_size <= MAX_BUFFER_SIZE);
 }
 
 static void validate_memset(void)
