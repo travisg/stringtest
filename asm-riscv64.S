@@ -134,3 +134,5 @@ mymemset_asm:
 mymemcpy_asm:
     // Save return value.
     ret
+
+// vim: ts=4:sw=4:expandtab:

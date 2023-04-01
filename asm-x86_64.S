@@ -26,3 +26,5 @@ mymemcpy_asm:
     mov %rdx, %rcx
     rep movsb // while (rcx-- > 0) *rdi++ = *rsi++;
     ret
+
+// vim: ts=4:sw=4:expandtab:

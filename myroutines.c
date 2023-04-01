@@ -32,3 +32,4 @@ void *mymemset_c(void *dst, int c, size_t len) {
 
 }
 
+// vim: ts=4:sw=4:expandtab:
