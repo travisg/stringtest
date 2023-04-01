@@ -1,15 +1,17 @@
 /*
- * Copyright (c) 2008-2014 Travis Geiselbrecht
+ * Copyright (c) 2008-2023 Travis Geiselbrecht
  *
  * Use of this source code is governed by a MIT-style
  * license that can be found in the LICENSE file or at
  * https://opensource.org/licenses/MIT
  */
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <malloc.h>
+#include <getopt.h>
 #include <inttypes.h>
+#include <malloc.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 static uint8_t *src;
@@ -298,24 +300,93 @@ static void validate_memset(void) {
     }
 }
 
-int main() {
+static void usage(char **argv) {
+    fprintf(stderr, "usage: %s [-h] [-b/--bench] [-v/--validate] [-c/--memcpy] [-s/--memset]\n", argv[0]);
+    fprintf(stderr, "\tAt least one of --bench or --validate must be specified ");
+    fprintf(stderr, "as well as at least one of --memcpy or --memset.\n");
+
+    exit(1);
+}
+
+int main(int argc, char **argv) {
+    // choices of things to do
+    bool bench = false;
+    bool validate = false;
+    bool memcpy = false;
+    bool memset = false;
+
+    // read in any overriding configuration from the command line
+    for (;;) {
+        int c;
+        int option_index = 0;
+
+        static struct option long_options[] = {
+            {"bench", 0, 0, 'b'},
+            {"memcpy", 0, 0, 'c'},
+            {"help", 0, 0, 'h'},
+            {"memset", 0, 0, 's'},
+            {"validate", 0, 0, 'v'},
+            {0, 0, 0, 0},
+        };
+
+        c = getopt_long(argc, argv, "bchsv", long_options, &option_index);
+        if (c == -1)
+            break;
+
+        switch (c) {
+            case 'b':
+                bench = true;
+                break;
+            case 'c':
+                memcpy = true;
+                break;
+            case 's':
+                memset = true;
+                break;
+            case 'v':
+                validate = true;
+                break;
+            case 'h':
+            default:
+                usage(argv);
+                break;
+        }
+    }
+
+    if (!bench && !validate) {
+        fprintf(stderr, "neither bench nor validate options were specified\n");
+        usage(argv);
+    }
+    if (!memset && !memcpy) {
+        fprintf(stderr, "neither memcpy nor memset options were specified\n");
+        usage(argv);
+    }
+
     src = memalign(64, BUFFER_SIZE + 256);
     dst = memalign(64, BUFFER_SIZE + 256);
     src2 = memalign(64, BUFFER_SIZE + 256);
     dst2 = memalign(64, BUFFER_SIZE + 256);
-
-    printf("src %p, dst %p\n", src, dst);
-    printf("src2 %p, dst2 %p\n", src2, dst2);
-
     if (!src || !dst || !src2 || !dst2) {
         printf("failed to allocate all the buffers\n");
         goto out;
     }
 
-    //validate_memcpy();
-    validate_memset();
-    //bench_memcpy();
-    //bench_memset();
+    if (validate) {
+        if (memset) {
+            validate_memset();
+        }
+        if (memcpy) {
+            validate_memcpy();
+        }
+    }
+    if (bench) {
+        if (memset) {
+            bench_memset();
+        }
+        if (memcpy) {
+            bench_memcpy();
+        }
+    }
 
 out:
     free(src);
