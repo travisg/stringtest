@@ -37,7 +37,7 @@ mymemset_asm:
     mv      a3,a0
 
     // zero length, we're done
-    beq     a2,zero,.Lmemset_exit
+    beqz    a2,.Lmemset_exit
 
     // mask off everything outside of the bottom byte
     andi    a1,a1,0xff
@@ -48,7 +48,7 @@ mymemset_asm:
 
     // are we 8 byte misaligned?
     andi    a4,a3,7
-    beq     a4,zero,.Lmemset_64byte
+    beqz    a4,.Lmemset_64byte
 
     // memset up to the 8 byte alignment
 
@@ -78,7 +78,7 @@ mymemset_asm:
 
     // compute the number of 64 byte sets
     srli    a4,a2,6
-    beq     a4,zero,.Lmemset_8byte
+    beqz    a4,.Lmemset_8byte
     // compute the last address of a run of these sets
     slli    a4,a4,6
     add     a4,a3,a4
@@ -97,12 +97,12 @@ mymemset_asm:
 
     // mask off the bottom 6 bits of a2 for any residual copies
     andi    a2,a2,63
-    beq     a2,zero,.Lmemset_exit
+    beqz    a2,.Lmemset_exit
 
 .Lmemset_8byte:
     // compute the number of 8 byte sets
     srli    a4,a2,3
-    beq     a4,zero,.Lmemset_bytewise
+    beqz    a4,.Lmemset_bytewise
 
     // compute the last address of a run of 8 byte sets
     slli    a4,a4,3
@@ -116,7 +116,7 @@ mymemset_asm:
 
     // mask off the bottom 3 bits of a2 for any residual copies
     andi    a2,a2,7
-    beq     a2,zero,.Lmemset_exit
+    beqz    a2,.Lmemset_exit
 
 .Lmemset_bytewise:
     // compute the max address (a2) and loop until the dest pointer (a3) reaches it
@@ -130,9 +130,120 @@ mymemset_asm:
     // a0 should still hold the original dest
     ret
 
+    // a0 = dest
+    // a1 = src
+    // a2 = size
 .globl mymemcpy_asm
 mymemcpy_asm:
     // Save return value.
+    // make a copy of dest so we can restore it at exit
+    mv      t6,a0
+
+    // zero length, we're done
+    beqz    a2,.Lmemcpy_exit
+
+    // compare src and dest, if they're the same we're done
+    beq     a0,a1,.Lmemcpy_exit
+
+    // if length < 16 bytes, just revert to bytewise
+    li      a3,16
+    blt     a2,a3,.Lmemcpy_bytewise
+
+    // see if the source and dest are similarly 8 byte aligned
+    xor     a3,a0,a1
+    andi    a3,a3,7
+    bnez    a3,.Lmemcpy_bytewise // give up for now if they're not aligned
+
+    // is the dest misaligned?
+    andi    a3,a0,7
+    beqz    a3,.Lmemcpy_64byte
+
+    // copy bytes up until dest is 8 byte aligned
+
+    // compute the next 8 byte aligned address at dest
+    andi    a3,a0,-8
+    addi    a3,a3,8
+
+    // subtract the amount of bytes we're about to set from overall length
+    sub     a4,a3,a0
+    sub     a2,a2,a4
+
+    // bytewise copy until we hit this 8 byte aligned dest address
+0:
+    addi    a0,a0,1
+    lbu     a4,0(a1)
+    addi    a1,a1,1
+    sb      a4,-1(a0)
+    bne     a0,a3,0b
+
+.Lmemcpy_64byte:
+    // compute the number of 64 byte copies
+    srli    a3,a2,6
+    beqz    a3,.Lmemcpy_8byte
+    // compute the last source address of a run of these sets
+    slli    a3,a3,6
+    add     a3,a3,a1
+
+    // copy 64 bytes at a time
+0:
+    ld      a4,0(a1)
+    ld      a5,8(a1)
+    ld      a6,16(a1)
+    ld      a7,24(a1)
+    ld      t0,32(a1)
+    ld      t1,40(a1)
+    ld      t2,48(a1)
+    ld      t3,56(a1)
+    addi    a1,a1,64
+    sd      a4,0(a0)
+    sd      a5,8(a0)
+    sd      a6,16(a0)
+    sd      a7,24(a0)
+    sd      t0,32(a0)
+    sd      t1,40(a0)
+    sd      t2,48(a0)
+    sd      t3,56(a0)
+    addi    a0,a0,64
+    bne     a1,a3,0b
+
+    // mask off the bottom 6 bits of a2 for any residual copies
+    andi    a2,a2,63
+    beqz    a2,.Lmemcpy_exit
+
+.Lmemcpy_8byte:
+    // compute the number of 8 byte copies
+    srli    a3,a2,3
+    beqz    a3,.Lmemcpy_bytewise
+    // compute the last source address of a run of these sets
+    slli    a3,a3,3
+    add     a3,a3,a1
+
+    // copy 8 bytes at a time, testing for terminal source address
+0:
+    ld      a4,0(a1)
+    addi    a1,a1,8
+    sd      a4,0(a0)
+    addi    a0,a0,8
+    bne     a1,a3,0b
+
+    // mask off the bottom 3 bits of a2 for any residual copies
+    andi    a2,a2,7
+    beqz    a2,.Lmemcpy_exit
+
+.Lmemcpy_bytewise:
+    // compute the terminal source address
+    add     a3,a1,a2
+
+    // copy one byte at a time, testing for terminal source address
+0:
+    lbu     a4,0(a1)
+    addi    a1,a1,1
+    sb      a4,0(a0)
+    addi    a0,a0,1
+    bne     a1,a3,0b
+
+.Lmemcpy_exit:
+    mv      a0,t6
     ret
 
 // vim: ts=4:sw=4:expandtab:

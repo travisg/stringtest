@@ -71,6 +71,9 @@ static void *c_memcpy(void *dest, void const *source, size_t count) {
     char *xd = (char *)dest;
     const char *xs = (const char *)source;
 
+    if (count == 0 || dest == source)
+        return dest;
+
     for ( ; count > 0; count-- ) {
         *xd++ = *xs++;
     }
@@ -165,6 +168,8 @@ static void validate_memcpy(void) {
     const size_t maxsrcalign = 64;
     const size_t maxdstalign = 64;
     const size_t maxsize = 256;
+    size_t err_count = 0;
+    const size_t max_err = 16;
 
     printf("testing memcpy for correctness\n");
 
@@ -181,17 +186,30 @@ static void validate_memcpy(void) {
 
                 //printf("srcalign %zu, dstalign %zu, size %zu\n", srcalign, dstalign, size);
 
+                // fill the source and destination buffers with different random patterns
                 fillbuf(src, maxsize * 2, 567);
                 fillbuf(src2, maxsize * 2, 567);
                 fillbuf(dst, maxsize * 2, 123514);
                 fillbuf(dst2, maxsize * 2, 123514);
 
+                // run the reference memcpy and memcpy under test on two separate source and dest buffers.
                 memcpy(dst + dstalign, src + srcalign, size);
                 mymemcpy_asm(dst2 + dstalign, src2 + srcalign, size);
 
+                // compare the results
                 int comp = memcmp(dst, dst2, maxsize * 2);
                 if (comp != 0) {
                     printf("error! srcalign %zu, dstalign %zu, size %zu\n", srcalign, dstalign, size);
+
+                    for (size_t i = 0; i < size * 2; i++) {
+                        printf("%zu: %#hhx %#hhx %c\n", i, dst[i], dst2[i], (dst[i] != dst2[i]) ? '*' : ' ');
+                    }
+
+                    err_count++;
+                    if (err_count > max_err) {
+                        printf("aborting after %zu errors\n", max_err);
+                        return;
+                    }
                 }
             }
         }
