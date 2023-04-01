@@ -7,8 +7,10 @@
  */
 .text
 
-.globl mymemset
-mymemset:
+// Simple memset and memcpy routines that use rep stosb
+
+.globl mymemset_asm
+mymemset_asm:
     // Save return value.
     mov %rdi, %r11
     mov %sil, %al
@@ -17,8 +19,8 @@ mymemset:
     mov %r11, %rax
     ret
 
-.globl mymemcpy
-mymemcpy:
+.globl mymemcpy_asm
+mymemcpy_asm:
     // Save return value.
     mov %rdi, %rax
     mov %rdx, %rcx

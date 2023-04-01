@@ -19,17 +19,17 @@ static uint8_t *src2;
 static uint8_t *dst2;
 
 #define BUFFER_SIZE (64*1024*1024)
-#define TOTAL_TRANSFER_SIZE (1024*1024*1024) // target transfer size per benchmark
-//#define ITERATIONS (1024*1024*1024 / BUFFER_SIZE) // enough iterations to have to copy/set 1GB of memory
+#define TOTAL_TRANSFER_SIZE (256*1024*1024) // target transfer size per benchmark
+#define MAX_ITERATIONS_MEMCPY (100000) // when computing the number of benchmark iterations, dont run more than this
+#define MAX_ITERATIONS_MEMSET (100000) // when computing the number of benchmark iterations, dont run more than this
 
-#if 0
-static inline void *mymemcpy(void *dest, const void *source, size_t len) { return memcpy(dest, source, len); }
-static inline void *mymemset(void *dest, int c, size_t len) { return memset(dest, c, len); }
-#else
 // if we're testing our own memcpy, use this
-extern void *mymemcpy(void *dst, const void *src, size_t len);
-extern void *mymemset(void *dst, int c, size_t len);
-#endif
+extern void *mymemcpy_c(void *dst, const void *src, size_t len);
+extern void *mymemset_c(void *dst, int c, size_t len);
+extern void *mymemcpy_asm(void *dst, const void *src, size_t len);
+extern void *mymemset_asm(void *dst, int c, size_t len);
+#define mymemcpy mymemcpy_asm
+#define mymemset mymemset_asm
 
 // 64bit nanoseconds
 typedef uint64_t my_time_t;
@@ -48,6 +48,10 @@ static my_time_t current_time() {
 static const char *bytes_per_sec(uint64_t bytes, my_time_t t) {
     static char strbuf[128];
 
+    if (t == 0) {
+        t = 1;
+    }
+
     uint64_t temp = bytes * 1000000000ULL / t;
 
     if (temp > 1024*1024*1024) {
@@ -61,96 +65,18 @@ static const char *bytes_per_sec(uint64_t bytes, my_time_t t) {
 }
 
 /* reference implementations of memmove/memcpy */
-typedef long word;
+static void *c_memcpy(void *dest, void const *source, size_t count) {
+    char *xd = (char *)dest;
+    const char *xs = (const char *)source;
 
-#define lsize sizeof(word)
-#define lmask (lsize - 1)
-
-static void *c_memmove(void *dest, void const *source, size_t count) {
-    char *d = (char *)dest;
-    const char *s = (const char *)source;
-    int len;
-
-    if (count == 0 || dest == source)
-        return dest;
-
-    if ((long)d < (long)s) {
-        if (((long)d | (long)s) & lmask) {
-            // source and/or dest do not align on word boundary
-            if ((((long)d ^ (long)s) & lmask) || (count < lsize))
-                len = count; // copy the rest of the buffer with the byte mover
-            else
-                len = lsize - ((long)d & lmask); // move the ptrs up to a word boundary
-
-            count -= len;
-            for (; len > 0; len--)
-                *d++ = *s++;
-        }
-        for (len = count / lsize; len > 0; len--) {
-            *(word *)d = *(word *)s;
-            d += lsize;
-            s += lsize;
-        }
-        for (len = count & lmask; len > 0; len--)
-            *d++ = *s++;
-    } else {
-        d += count;
-        s += count;
-        if (((long)d | (long)s) & lmask) {
-            // src and/or dest do not align on word boundary
-            if ((((long)d ^ (long)s) & lmask) || (count <= lsize))
-                len = count;
-            else
-                len = ((long)d & lmask);
-
-            count -= len;
-            for (; len > 0; len--)
-                *--d = *--s;
-        }
-        for (len = count / lsize; len > 0; len--) {
-            d -= lsize;
-            s -= lsize;
-            *(word *)d = *(word *)s;
-        }
-        for (len = count & lmask; len > 0; len--)
-            *--d = *--s;
+    for ( ; count > 0; count-- ) {
+        *xd++ = *xs++;
     }
 
     return dest;
 }
 
 static void *c_memset(void *s, int c, size_t count) {
-#if 0
-    char *xs = (char *) s;
-    size_t len = (-(size_t)s) & lmask;
-    word cc = c & 0xff;
-
-    if ( count > len ) {
-        count -= len;
-        cc |= cc << 8;
-        cc |= cc << 16;
-        if (sizeof(word) == 8)
-            cc |= (uint64_t)cc << 32; // should be optimized out on 32 bit machines
-
-        // write to non-aligned memory byte-wise
-        for ( ; len > 0; len-- )
-            *xs++ = c;
-
-        // write to aligned memory dword-wise
-        for ( len = count / lsize; len > 0; len-- ) {
-            *((word *)xs) = (word)cc;
-            xs += lsize;
-        }
-
-        count &= lmask;
-    }
-
-    // write remaining bytes
-    for ( ; count > 0; count-- )
-        *xs++ = c;
-
-    return s;
-#else
     char *xs = (char *) s;
 
     for ( ; count > 0; count-- ) {
@@ -158,24 +84,31 @@ static void *c_memset(void *s, int c, size_t count) {
     }
 
     return s;
-#endif
 }
 
 static void *null_memcpy(void *dest, const void *source, size_t len) {
     return dest;
 }
 
+static void *null_memset(void *dest, int c, size_t len) {
+    return dest;
+}
+
 __attribute__((noinline))
-static my_time_t bench_memcpy_routine(void *memcpy_routine(void *, const void *, size_t), size_t srcalign, size_t dstalign, size_t iterations) {
+static my_time_t bench_memcpy_routine(void *memcpy_routine(void *, const void *, size_t), size_t srcalign, size_t dstalign, size_t size, size_t iterations) {
     my_time_t t0;
+
+    uint8_t * const d = dst + dstalign;
+    uint8_t * const s = src + srcalign;
 
     t0 = current_time();
     for (size_t i=0; i < iterations; i++) {
-        memcpy_routine(dst + dstalign, src + srcalign, BUFFER_SIZE);
+        memcpy_routine(d, s, size);
     }
     return current_time() - t0;
 }
 
+__attribute__((noinline))
 static void bench_memcpy(void) {
     my_time_t null, c, libc, mine;
     size_t srcalign, dstalign;
@@ -184,19 +117,24 @@ static void bench_memcpy(void) {
 
     for (srcalign = 0; srcalign < 64; ) {
         for (dstalign = 0; dstalign < 64; ) {
-            const size_t iterations = TOTAL_TRANSFER_SIZE / BUFFER_SIZE;
+            for (size_t size = 1; size <= BUFFER_SIZE; size <<=1) {
+                size_t iterations = TOTAL_TRANSFER_SIZE / size;
+                if (iterations > MAX_ITERATIONS_MEMCPY) {
+                    iterations = MAX_ITERATIONS_MEMCPY;
+                }
 
-            null = bench_memcpy_routine(&null_memcpy, srcalign, dstalign, iterations);
-            c = bench_memcpy_routine(&c_memmove, srcalign, dstalign, iterations);
-            libc = bench_memcpy_routine(&memcpy, srcalign, dstalign, iterations);
-            mine = bench_memcpy_routine(&mymemcpy, srcalign, dstalign, iterations);
+                null = bench_memcpy_routine(&null_memcpy, srcalign, dstalign, size, iterations);
+                c = bench_memcpy_routine(&c_memcpy, srcalign, dstalign, size, iterations);
+                libc = bench_memcpy_routine(&memcpy, srcalign, dstalign, size, iterations);
+                mine = bench_memcpy_routine(&mymemcpy, srcalign, dstalign, size, iterations);
 
-            printf("srcalign %zu, dstalign %zu: ", srcalign, dstalign);
-            //printf("   null memcpy %" PRIu64 " ns\n", null);
-            printf("c memcpy %" PRIu64 " ns, %s; ", c, bytes_per_sec(BUFFER_SIZE * iterations, c));
-            printf("libc memcpy %" PRIu64 "  ns, %s; ", libc, bytes_per_sec(BUFFER_SIZE * iterations, libc));
-            printf("my memcpy %" PRIu64 " ns, %s; ", mine, bytes_per_sec(BUFFER_SIZE * iterations, mine));
-            printf("\n");
+                printf("srcalign %zu, dstalign %zu, size %zu, iter %zu: ", srcalign, dstalign, size, iterations);
+                printf("null (overhead) %" PRIu64 " ns; ", null);
+                printf("c memcpy %" PRIu64 " ns, %s; ", c - null, bytes_per_sec(size * iterations, c - null));
+                printf("libc memcpy %" PRIu64 "  ns, %s; ", libc - null, bytes_per_sec(size * iterations, libc - null));
+                printf("my memcpy %" PRIu64 " ns, %s; ", mine - null, bytes_per_sec(size * iterations, mine - null));
+                printf("\n");
+            }
 
             if (dstalign < 8)
                 dstalign++;
@@ -219,6 +157,7 @@ static void fillbuf(void *ptr, size_t len, uint32_t seed) {
     }
 }
 
+__attribute__((noinline))
 static void validate_memcpy(void) {
     size_t srcalign, dstalign, size;
     const size_t maxsrcalign = 64;
@@ -245,8 +184,8 @@ static void validate_memcpy(void) {
                 fillbuf(dst, maxsize * 2, 123514);
                 fillbuf(dst2, maxsize * 2, 123514);
 
-                c_memmove(dst + dstalign, src + srcalign, size);
-                mymemcpy(dst2 + dstalign, src2 + srcalign, size);
+                memcpy(dst + dstalign, src + srcalign, size);
+                mymemcpy_asm(dst2 + dstalign, src2 + srcalign, size);
 
                 int comp = memcmp(dst, dst2, maxsize * 2);
                 if (comp != 0) {
@@ -257,64 +196,102 @@ static void validate_memcpy(void) {
     }
 }
 
+__attribute__((noinline))
 static my_time_t bench_memset_routine(void *memset_routine(void *, int, size_t), size_t dstalign, size_t len, size_t iterations) {
     my_time_t t0;
 
+    uint8_t * const d = dst + dstalign;
+
     t0 = current_time();
     for (size_t i=0; i < iterations; i++) {
-        memset_routine(dst + dstalign, 0, len);
+        memset_routine(d, 0, len);
     }
     return current_time() - t0;
 }
 
+__attribute__((noinline))
 static void bench_memset(void) {
-    my_time_t c, libc, mine;
+    my_time_t null, c, libc, mine;
     size_t dstalign;
     size_t size;
     const size_t maxalign = 64;
 
     printf("memset speed test\n");
 
-    for (dstalign = 0; dstalign < maxalign; dstalign++) {
+    for (dstalign = 0; dstalign < maxalign;) {
         for (size = 1; size <= BUFFER_SIZE; size <<=1) {
-            const size_t iterations = TOTAL_TRANSFER_SIZE / size;
+            size_t iterations = TOTAL_TRANSFER_SIZE / size;
+            if (iterations > MAX_ITERATIONS_MEMSET) {
+                iterations = MAX_ITERATIONS_MEMSET;
+            }
 
+            /* compute the overhead of the benchmark routine by calling a null function. Take
+             * the smallest of 3 runs.
+             */
+            null = UINT64_MAX;
+            for (int i = 0; i < 3; i++) {
+                my_time_t n = bench_memset_routine(&null_memset, dstalign, size, iterations);
+                //printf("%" PRIu64 " %zu\n", n, iterations);
+                if (n < null) {
+                    null = n;
+                }
+            }
             c = bench_memset_routine(&c_memset, dstalign, size, iterations);
             libc = bench_memset_routine(&memset, dstalign, size, iterations);
             mine = bench_memset_routine(&mymemset, dstalign, size, iterations);
 
-            printf("dstalign %zu size %zu: ", dstalign, size);
-            printf("c memset %" PRIu64 " ns, %s; ", c, bytes_per_sec(size * iterations, c));
-            printf("libc memset %" PRIu64 " ns, %s; ", libc, bytes_per_sec(size * iterations, libc));
-            printf("my memset %" PRIu64 " ns, %s; ", mine, bytes_per_sec(size * iterations, mine));
+            printf("dstalign %zu size %zu (iter %zu): ", dstalign, size, iterations);
+            printf("null (overhead) %" PRIu64 " ns; ", null);
+            printf("c memset %" PRIu64 " ns, %s; ", c - null, bytes_per_sec(size * iterations, c - null));
+            printf("libc memset %" PRIu64 " ns, %s; ", libc - null, bytes_per_sec(size * iterations, libc - null));
+            printf("my memset %" PRIu64 " ns, %s; ", mine - null, bytes_per_sec(size * iterations, mine - null));
             printf("\n");
         }
+        if (dstalign < 8)
+            dstalign++;
+        else
+            dstalign <<= 1;
     }
 }
 
+__attribute__((noinline))
 static void validate_memset(void) {
     size_t dstalign, size;
     int c;
     const size_t maxalign = 64;
     const size_t maxsize = 256;
+    size_t err_count = 0;
+    const size_t max_err = 16;
 
     printf("testing memset for correctness\n");
 
     printf("align 0..%zu, size 0...%zu\n", maxalign, maxsize);
     for (dstalign = 0; dstalign < maxalign; dstalign++) {
-        //printf("align %zd, size 0...%zu\n", dstalign, maxsize);
+        //printf("\talign %zd, size 0...%zu\n", dstalign, maxsize);
         for (size = 0; size < maxsize; size++) {
+            //printf("\t\talign %zd, size %zu\n", dstalign, size);
             for (c = -1; c < 257; c++) {
+                //printf("\t\t\talign %zd, size %zu, c %d\n", dstalign, size, c);
 
                 fillbuf(dst, maxsize * 2, 123514);
                 fillbuf(dst2, maxsize * 2, 123514);
 
-                c_memset(dst + dstalign, c, size);
-                mymemset(dst2 + dstalign, c, size);
+                memset(dst + dstalign, c, size);
+                mymemset_asm(dst2 + dstalign, c, size);
 
                 int comp = memcmp(dst, dst2, maxsize * 2);
                 if (comp != 0) {
                     printf("error! align %zu, c 0x%x, size %zu\n", dstalign, c, size);
+
+                    for (size_t i = 0; i < size; i++) {
+                        printf("%zu: %#hhx %#hhx\n", i, dst[i], dst2[i]);
+                    }
+
+                    err_count++;
+                    if (err_count > max_err) {
+                        printf("aborting after %zu errors\n", max_err);
+                        return;
+                    }
                 }
             }
         }
@@ -336,9 +313,9 @@ int main() {
     }
 
     //validate_memcpy();
-    //validate_memset();
+    validate_memset();
     //bench_memcpy();
-    bench_memset();
+    //bench_memset();
 
 out:
     free(src);

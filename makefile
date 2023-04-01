@@ -1,17 +1,19 @@
+UNAME := $(shell uname -s)
+ARCH := $(shell uname -m)
+
+#$(info UNAME = $(UNAME))
+#$(info ARCH = $(ARCH))
 
 TARGET := string_tests
-BUILDDIR := build-$(TARGET)
+BUILDDIR := build-$(TARGET)-$(ARCH)
 
 # compiler flags, default libs to link against
-COMPILEFLAGS := -g -O2 -Wall -W -I. -Wno-unused-parameter -fno-builtin
+COMPILEFLAGS := -g -O2 -Wall -W -I. -Wno-unused-parameter -Wno-unused-function -fno-builtin
 CFLAGS :=
 CXXFLAGS := -std=c++11
 ASMFLAGS :=
-LDFLAGS :=
+LDFLAGS := -static
 LDLIBS :=
-
-UNAME := $(shell uname -s)
-ARCH := $(shell uname -m)
 
 # switch any platform specific stuff here
 # ifeq ($(findstring CYGWIN,$(UNAME)),CYGWIN)
@@ -35,7 +37,8 @@ NOECHO ?= @
 
 OBJS := \
 	string_tests.o \
-	asm.o
+	myroutines.o \
+	asm-$(ARCH).o
 
 OBJS := $(addprefix $(BUILDDIR)/,$(OBJS))
 DEPS := $(OBJS:.o=.d)
