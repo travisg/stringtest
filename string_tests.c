@@ -25,6 +25,8 @@ static uint8_t *dst2;
 #define MAX_ITERATIONS_MEMCPY (100000) // when computing the number of benchmark iterations, dont run more than this
 #define MAX_ITERATIONS_MEMSET (100000) // when computing the number of benchmark iterations, dont run more than this
 
+#define __NO_INLINE __attribute__((noinline))
+
 // if we're testing our own memcpy, use this
 extern void *mymemcpy_c(void *dst, const void *src, size_t len);
 extern void *mymemset_c(void *dst, int c, size_t len);
@@ -67,6 +69,7 @@ static const char *bytes_per_sec(uint64_t bytes, my_time_t t) {
 }
 
 /* reference implementations of memmove/memcpy */
+__NO_INLINE
 static void *c_memcpy(void *dest, void const *source, size_t count) {
     char *xd = (char *)dest;
     const char *xs = (const char *)source;
@@ -81,6 +84,7 @@ static void *c_memcpy(void *dest, void const *source, size_t count) {
     return dest;
 }
 
+__NO_INLINE
 static void *c_memset(void *s, int c, size_t count) {
     char *xs = (char *) s;
 
@@ -91,15 +95,17 @@ static void *c_memset(void *s, int c, size_t count) {
     return s;
 }
 
+__NO_INLINE
 static void *null_memcpy(void *dest, const void *source, size_t len) {
     return dest;
 }
 
+__NO_INLINE
 static void *null_memset(void *dest, int c, size_t len) {
     return dest;
 }
 
-__attribute__((noinline))
+__NO_INLINE
 static my_time_t bench_memcpy_routine(void *memcpy_routine(void *, const void *, size_t), size_t srcalign, size_t dstalign, size_t size, size_t iterations) {
     my_time_t t0;
 
@@ -113,7 +119,7 @@ static my_time_t bench_memcpy_routine(void *memcpy_routine(void *, const void *,
     return current_time() - t0;
 }
 
-__attribute__((noinline))
+__NO_INLINE
 static void bench_memcpy(void) {
     my_time_t null, c, libc, mine;
     size_t srcalign, dstalign;
@@ -162,7 +168,7 @@ static void fillbuf(void *ptr, size_t len, uint32_t seed) {
     }
 }
 
-__attribute__((noinline))
+__NO_INLINE
 static void validate_memcpy(void) {
     size_t srcalign, dstalign, size;
     const size_t maxsrcalign = 64;
@@ -194,7 +200,7 @@ static void validate_memcpy(void) {
 
                 // run the reference memcpy and memcpy under test on two separate source and dest buffers.
                 memcpy(dst + dstalign, src + srcalign, size);
-                mymemcpy_asm(dst2 + dstalign, src2 + srcalign, size);
+                mymemcpy(dst2 + dstalign, src2 + srcalign, size);
 
                 // compare the results
                 int comp = memcmp(dst, dst2, maxsize * 2);
@@ -216,7 +222,7 @@ static void validate_memcpy(void) {
     }
 }
 
-__attribute__((noinline))
+__NO_INLINE
 static my_time_t bench_memset_routine(void *memset_routine(void *, int, size_t), size_t dstalign, size_t len, size_t iterations) {
     my_time_t t0;
 
@@ -229,7 +235,7 @@ static my_time_t bench_memset_routine(void *memset_routine(void *, int, size_t),
     return current_time() - t0;
 }
 
-__attribute__((noinline))
+__NO_INLINE
 static void bench_memset(void) {
     my_time_t null, c, libc, mine;
     size_t dstalign;
@@ -274,7 +280,7 @@ static void bench_memset(void) {
     }
 }
 
-__attribute__((noinline))
+__NO_INLINE
 static void validate_memset(void) {
     size_t dstalign, size;
     int c;
@@ -297,7 +303,7 @@ static void validate_memset(void) {
                 fillbuf(dst2, maxsize * 2, 123514);
 
                 memset(dst + dstalign, c, size);
-                mymemset_asm(dst2 + dstalign, c, size);
+                mymemset(dst2 + dstalign, c, size);
 
                 int comp = memcmp(dst, dst2, maxsize * 2);
                 if (comp != 0) {
@@ -328,10 +334,10 @@ static void usage(char **argv) {
 
 int main(int argc, char **argv) {
     // choices of things to do
-    bool bench = false;
-    bool validate = false;
-    bool memcpy = false;
-    bool memset = false;
+    bool do_bench = false;
+    bool do_validate = false;
+    bool do_memcpy = false;
+    bool do_memset = false;
 
     // read in any overriding configuration from the command line
     for (;;) {
@@ -353,16 +359,16 @@ int main(int argc, char **argv) {
 
         switch (c) {
             case 'b':
-                bench = true;
+                do_bench = true;
                 break;
             case 'c':
-                memcpy = true;
+                do_memcpy = true;
                 break;
             case 's':
-                memset = true;
+                do_memset = true;
                 break;
             case 'v':
-                validate = true;
+                do_validate = true;
                 break;
             case 'h':
             default:
@@ -371,11 +377,11 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (!bench && !validate) {
+    if (!do_bench && !do_validate) {
         fprintf(stderr, "neither bench nor validate options were specified\n");
         usage(argv);
     }
-    if (!memset && !memcpy) {
+    if (!do_memset && !do_memcpy) {
         fprintf(stderr, "neither memcpy nor memset options were specified\n");
         usage(argv);
     }
@@ -389,19 +395,26 @@ int main(int argc, char **argv) {
         goto out;
     }
 
-    if (validate) {
-        if (memset) {
+    // touch all of the buffers to pre-fault them in
+    memset(src, 0, BUFFER_SIZE + 256);
+    memset(dst, 0, BUFFER_SIZE + 256);
+    memset(src2, 0, BUFFER_SIZE + 256);
+    memset(dst2, 0, BUFFER_SIZE + 256);
+
+    // run various permutations of validations and benchmarks
+    if (do_validate) {
+        if (do_memset) {
             validate_memset();
         }
-        if (memcpy) {
+        if (do_memcpy) {
             validate_memcpy();
         }
     }
-    if (bench) {
-        if (memset) {
+    if (do_bench) {
+        if (do_memset) {
             bench_memset();
         }
-        if (memcpy) {
+        if (do_memcpy) {
             bench_memcpy();
         }
     }

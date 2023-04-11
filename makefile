@@ -10,7 +10,7 @@ BUILDDIR := build-$(TARGET)-$(ARCH)
 # compiler flags, default libs to link against
 COMPILEFLAGS := -g -O2 -Wall -W -I. -Wno-unused-parameter -Wno-unused-function -fno-builtin
 CFLAGS :=
-CXXFLAGS := -std=c++11
+CXXFLAGS :=
 ASMFLAGS :=
 LDFLAGS := -static
 LDLIBS :=

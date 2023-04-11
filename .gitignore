@@ -13,3 +13,4 @@ blk.bin
 *.dSYM
 .clangd
 .vscode
+compile_commands.json
