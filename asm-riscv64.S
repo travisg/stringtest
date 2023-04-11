@@ -31,6 +31,7 @@
 //
 // Tries to stick with registers to maximize compressed instruction usage
 // and explicitly avoids using the stack.
+.balign 32
 .globl mymemset_asm
 mymemset_asm:
     // make a copy of dest, leave the original value in a0
@@ -60,6 +61,7 @@ mymemset_asm:
     sub     a5,a4,a3
     sub     a2,a2,a5
 
+.balign 4
 0:
     sb      a1,(a3)
     addi    a3,a3,1
@@ -83,6 +85,7 @@ mymemset_asm:
     slli    a4,a4,6
     add     a4,a3,a4
 
+.balign 4
 0:
     sd      a1,(a3)
     sd      a1,8(a3)
@@ -109,6 +112,7 @@ mymemset_asm:
     add     a4,a3,a4
 
     // copy 8 bytes at a time
+.balign 4
 0:
     sd      a1,(a3)
     addi    a3,a3,8
@@ -121,6 +125,7 @@ mymemset_asm:
 .Lmemset_bytewise:
     // compute the max address (a2) and loop until the dest pointer (a3) reaches it
     add     a2,a3,a2
+.balign 4
 0:
     sb      a1,0(a3)
     addi    a3,a3,1
@@ -130,9 +135,14 @@ mymemset_asm:
     // a0 should still hold the original dest
     ret
 
+///////////////////////////////////////////////////////////////////////////////
+// memcpy
+///////////////////////////////////////////////////////////////////////////////
+
     // a0 = dest
     // a1 = src
     // a2 = size
+.balign 32
 .globl mymemcpy_asm
 mymemcpy_asm:
     // Save return value.
@@ -149,14 +159,9 @@ mymemcpy_asm:
     li      a3,16
     blt     a2,a3,.Lmemcpy_bytewise
 
-    // see if the source and dest are similarly 8 byte aligned
-    xor     a3,a0,a1
-    andi    a3,a3,7
-    bnez    a3,.Lmemcpy_bytewise // give up for now if they're not aligned
-
     // is the dest misaligned?
     andi    a3,a0,7
-    beqz    a3,.Lmemcpy_64byte
+    beqz    a3,.Lmemcpy_dest_aligned
 
     // copy bytes up until dest is 8 byte aligned
 
@@ -176,6 +181,11 @@ mymemcpy_asm:
     sb      a4,-1(a0)
     bne     a0,a3,0b
 
+.Lmemcpy_dest_aligned:
+    // see if the source is 8 byte aligned, dest is already 8 byte aligned
+    andi    a3,a1,7
+    bnez    a3,.Lmemcpy_misaligned // give up for now if they're not aligned
+
 .Lmemcpy_64byte:
     // compute the number of 64 byte copies
     srli    a3,a2,6
@@ -185,6 +195,7 @@ mymemcpy_asm:
     add     a3,a3,a1
 
     // copy 64 bytes at a time
+.balign 4
 0:
     ld      a4,0(a1)
     ld      a5,8(a1)
@@ -219,6 +230,7 @@ mymemcpy_asm:
     add     a3,a3,a1
 
     // copy 8 bytes at a time, testing for terminal source address
+.balign 4
 0:
     ld      a4,0(a1)
     addi    a1,a1,8
@@ -234,6 +246,8 @@ mymemcpy_asm:
     // compute the terminal source address
     add     a3,a1,a2
 
+.balign 16 // align the loop to 16 bytes to try to maximize the chance of getting
+           // it entirely within a cache line
     // copy one byte at a time, testing for terminal source address
 0:
     lbu     a4,0(a1)
@@ -245,5 +259,130 @@ mymemcpy_asm:
 .Lmemcpy_exit:
     mv      a0,t6
     ret
+
+    // deal with misaligned source. State at this point:
+    // source (a0) is misaligned by 1-7 bytes
+    // destination (a1) is 8 byte aligned
+    // length (a2) is at least 8 bytes
+.Lmemcpy_misaligned:
+    // compute the number of 8 byte copies we'll make below
+    srli    a3,a2,3
+    beqz    a3,.Lmemcpy_bytewise
+
+    // compute the last source address (a3) of a run of these sets
+    slli    a3,a3,3
+    add     a3,a3,a1
+
+    // mask off the bottom 3 bits of length (a2) for any residual copies
+    andi    a2,a2,7
+
+    // compute how much the source is misaligned
+    andi    a4,a1,7
+
+    // rebase to 0-6
+    addi    a4,a4,-1
+
+    // use a quick delta jump table to get to one of the 7 alignment handlers
+    lla     a5,.Lmemcpy_misaligned_table
+    slli    a4,a4,2
+    add     a6,a5,a4
+    lw      a4,0(a6)
+    add     a5,a5,a4
+    jr      a5
+
+.balign 4
+.Lmemcpy_misaligned_table:
+    .word   .Lmemcpy_misaligned_1 - .Lmemcpy_misaligned_table
+    .word   .Lmemcpy_misaligned_2 - .Lmemcpy_misaligned_table
+    .word   .Lmemcpy_misaligned_3 - .Lmemcpy_misaligned_table
+    .word   .Lmemcpy_misaligned_4 - .Lmemcpy_misaligned_table
+    .word   .Lmemcpy_misaligned_5 - .Lmemcpy_misaligned_table
+    .word   .Lmemcpy_misaligned_6 - .Lmemcpy_misaligned_table
+    .word   .Lmemcpy_misaligned_7 - .Lmemcpy_misaligned_table
+
+// Implement a loop to copy 8 bytes at a time with the 7 various unaligned
+// situations that can arise.
+.macro memcpy_implement_misalign n
+
+// precompute some constants
+.set INV_N, (8-\n)      // where N is 1-7, INV_N is the opposite of it 7-1
+.set N_8, (\n*8)        // N * 8, bits
+.set INV_N_8, (64-N_8) // 
+
+.balign 4
+memcpy_misaligned_\n:
+.Lmemcpy_misaligned_\n:
+    // prime the residual data (a5) between loops
+    // Current algorithm uses optimized load instructions of the right size.
+    // TODO: consider a 8 byte aligned load and shift. it may be invalid, since
+    // it could read outside the source buffer in some cases.
+.if \n == 7
+    lbu     a5,0(a1)
+.elseif \n == 6
+    lhu     a5,0(a1)
+.elseif \n == 5
+    lbu     a5,0(a1)
+    lhu     a6,1(a1)
+    slli    a6,a6,8
+    or      a5,a5,a6
+.elseif \n == 4
+    lwu     a5,0(a1)
+.elseif \n == 3
+    lbu     a5,0(a1)
+    lwu     a6,1(a1)
+    slli    a6,a6,8
+    or      a5,a5,a6
+.elseif \n == 2
+    lhu     a5,0(a1)
+    lwu     a6,2(a1)
+    slli    a6,a6,16
+    or      a5,a5,a6
+.elseif \n == 1
+    lbu     a5,0(a1)
+    lhu     a6,1(a1)
+    lwu     a7,3(a1)
+    slli    a6,a6,8
+    slli    a7,a7,24
+    or      a5,a5,a7
+    or      a5,a5,a6
+.else
+    unimp
+.endif
+
+.balign 4
+0:
+    // load 8 bytes at aligned source offset
+    ld      a4,INV_N(a1)
+    addi    a1,a1,8
+
+    // shift out the extra source data to a temporary spot (a6),
+    // or in the new residual data (a5),
+    // save the temporary data (a6) to the residual slot (a5)
+    srli    a6,a4,N_8
+    slli    a4,a4,INV_N_8
+    or      a4,a4,a5
+    mv      a5,a6
+
+    // store the destination data
+    sd      a4,0(a0)
+    addi    a0,a0,8
+
+    // test for terminal source address and loop
+    bne     a1,a3,0b
+
+    // end if length (a2) is zero
+    beqz    a2,.Lmemcpy_exit
+
+    // continue with any residiual bytewise copies to finish it off
+    j       .Lmemcpy_bytewise
+.endm
+
+memcpy_implement_misalign 1
+memcpy_implement_misalign 2
+memcpy_implement_misalign 3
+memcpy_implement_misalign 4
+memcpy_implement_misalign 5
+memcpy_implement_misalign 6
+memcpy_implement_misalign 7
 
 // vim: ts=4:sw=4:expandtab:

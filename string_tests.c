@@ -200,7 +200,7 @@ static void validate_memcpy(void) {
 
                 // run the reference memcpy and memcpy under test on two separate source and dest buffers.
                 memcpy(dst + dstalign, src + srcalign, size);
-                mymemcpy(dst2 + dstalign, src2 + srcalign, size);
+                void *res2 = mymemcpy(dst2 + dstalign, src2 + srcalign, size);
 
                 // compare the results
                 int comp = memcmp(dst, dst2, maxsize * 2);
@@ -216,6 +216,9 @@ static void validate_memcpy(void) {
                         printf("aborting after %zu errors\n", max_err);
                         return;
                     }
+                }
+                if (res2 != dst2 + dstalign) {
+                    printf("error: return is not destination! srcalign %zu, dstalign %zu, size %zu\n", srcalign, dstalign, size);
                 }
             }
         }
