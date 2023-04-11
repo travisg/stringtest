@@ -31,6 +31,7 @@
 //
 // Tries to stick with registers to maximize compressed instruction usage
 // and explicitly avoids using the stack.
+.balign 32
 .globl mymemset_asm
 mymemset_asm:
     // make a copy of dest, leave the original value in a0
@@ -60,6 +61,7 @@ mymemset_asm:
     sub     a5,a4,a3
     sub     a2,a2,a5
 
+.balign 4
 0:
     sb      a1,(a3)
     addi    a3,a3,1
@@ -83,6 +85,7 @@ mymemset_asm:
     slli    a4,a4,6
     add     a4,a3,a4
 
+.balign 4
 0:
     sd      a1,(a3)
     sd      a1,8(a3)
@@ -109,6 +112,7 @@ mymemset_asm:
     add     a4,a3,a4
 
     // copy 8 bytes at a time
+.balign 4
 0:
     sd      a1,(a3)
     addi    a3,a3,8
@@ -121,6 +125,7 @@ mymemset_asm:
 .Lmemset_bytewise:
     // compute the max address (a2) and loop until the dest pointer (a3) reaches it
     add     a2,a3,a2
+.balign 4
 0:
     sb      a1,0(a3)
     addi    a3,a3,1
@@ -130,9 +135,14 @@ mymemset_asm:
     // a0 should still hold the original dest
     ret
 
+///////////////////////////////////////////////////////////////////////////////
+// memcpy
+///////////////////////////////////////////////////////////////////////////////
+
     // a0 = dest
     // a1 = src
     // a2 = size
+.balign 32
 .globl mymemcpy_asm
 mymemcpy_asm:
     // Save return value.
@@ -149,14 +159,9 @@ mymemcpy_asm:
     li      a3,16
     blt     a2,a3,.Lmemcpy_bytewise
 
-    // see if the source and dest are similarly 8 byte aligned
-    xor     a3,a0,a1
-    andi    a3,a3,7
-    bnez    a3,.Lmemcpy_bytewise // give up for now if they're not aligned
-
     // is the dest misaligned?
     andi    a3,a0,7
-    beqz    a3,.Lmemcpy_64byte
+    beqz    a3,.Lmemcpy_dest_aligned
 
     // copy bytes up until dest is 8 byte aligned
 
@@ -176,6 +181,11 @@ mymemcpy_asm:
     sb      a4,-1(a0)
     bne     a0,a3,0b
 
+.Lmemcpy_dest_aligned:
+    // see if the source is 8 byte aligned, dest is already 8 byte aligned
+    andi    a3,a1,7
+    bnez    a3,.Lmemcpy_misaligned // give up for now if they're not aligned
+
 .Lmemcpy_64byte:
     // compute the number of 64 byte copies
     srli    a3,a2,6
@@ -185,6 +195,7 @@ mymemcpy_asm:
     add     a3,a3,a1
 
     // copy 64 bytes at a time
+.balign 4
 0:
     ld      a4,0(a1)
     ld      a5,8(a1)
@@ -219,6 +230,7 @@ mymemcpy_asm:
     add     a3,a3,a1
 
     // copy 8 bytes at a time, testing for terminal source address
+.balign 4
 0:
     ld      a4,0(a1)
     addi    a1,a1,8
@@ -234,6 +246,8 @@ mymemcpy_asm:
     // compute the terminal source address
     add     a3,a1,a2
 
+.balign 16 // align the loop to 16 bytes to try to maximize the chance of getting
+           // it entirely within a cache line
     // copy one byte at a time, testing for terminal source address
 0:
     lbu     a4,0(a1)
@@ -245,5 +259,63 @@ mymemcpy_asm:
 .Lmemcpy_exit:
     mv      a0,t6
     ret
+
+    // deal with misaligned source. destination must be 8 byte aligned
+    // at this point.
+.Lmemcpy_misaligned:
+    // compute how much the source is misaligned
+    andi    a3,a1,7
+
+    li      a4,4
+    beq     a4,a3,.Lmemcpy_4byte_misaligned
+
+    // bail out and just do bytewise memcpies
+    j       .Lmemcpy_bytewise
+
+
+// WIP here
+// try a 4 byte unaligned solution to try to work out how a 8 byte copy would work with unaligned accesses
+// TODO: generalize this algorithm with a shared preamble/postamble
+// implement the core loop with a macro for 1-7 stamp out 6 copies.
+
+.Lmemcpy_4byte_misaligned:
+    // compute the number of 8 byte copies
+    srli    a3,a2,3
+    beqz    a3,.Lmemcpy_bytewise
+    // compute the last source address of a run of these sets
+    slli    a3,a3,3
+    add     a3,a3,a1
+
+    // prime the residual data (a5) between loops
+    lwu     a5,0(a1)
+
+.balign 4
+0:
+    // load 8 bytes at aligned source offset
+    ld      a4,4(a1)
+    addi    a1,a1,8
+
+    // shift out the extra source data to a temporary spot (a6),
+    // or in the new residual data (a5)
+    // save the temporary data (a6) to the residual slot (a5)
+    srli    a6,a4,32
+    slli    a4,a4,32
+    or      a4,a4,a5
+    mv      a5,a6
+
+    // store the destination data
+    sd      a4,0(a0)
+    addi    a0,a0,8
+
+    // test for terminal source address and loop
+    bne     a1,a3,0b
+
+    // mask off the bottom 3 bits of a2 for any residual copies
+    andi    a2,a2,7
+    beqz    a2,.Lmemcpy_exit
+
+    j       .Lmemcpy_bytewise
+
+
 
 // vim: ts=4:sw=4:expandtab:
