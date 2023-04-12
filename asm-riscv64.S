@@ -286,7 +286,7 @@ mymemcpy_asm:
     lla     a5,.Lmemcpy_misaligned_table
     slli    a4,a4,2
     add     a6,a5,a4
-    lw      a4,0(a6)
+    lwu     a4,0(a6)
     add     a5,a5,a4
     jr      a5
 
@@ -307,7 +307,7 @@ mymemcpy_asm:
 // precompute some constants
 .set INV_N, (8-\n)      // where N is 1-7, INV_N is the opposite of it 7-1
 .set N_8, (\n*8)        // N * 8, bits
-.set INV_N_8, (64-N_8) // 
+.set INV_N_8, (64-N_8)  // inverse of N * 8
 
 .balign 4
 memcpy_misaligned_\n:
@@ -321,35 +321,35 @@ memcpy_misaligned_\n:
 .elseif \n == 6
     lhu     a5,0(a1)
 .elseif \n == 5
-    lbu     a5,0(a1)
     lhu     a6,1(a1)
+    lbu     a5,0(a1)
     slli    a6,a6,8
     or      a5,a5,a6
 .elseif \n == 4
     lwu     a5,0(a1)
 .elseif \n == 3
-    lbu     a5,0(a1)
     lwu     a6,1(a1)
+    lbu     a5,0(a1)
     slli    a6,a6,8
     or      a5,a5,a6
 .elseif \n == 2
-    lhu     a5,0(a1)
     lwu     a6,2(a1)
+    lhu     a5,0(a1)
     slli    a6,a6,16
     or      a5,a5,a6
 .elseif \n == 1
-    lbu     a5,0(a1)
     lhu     a6,1(a1)
     lwu     a7,3(a1)
+    lbu     a5,0(a1)
     slli    a6,a6,8
     slli    a7,a7,24
-    or      a5,a5,a7
     or      a5,a5,a6
+    or      a5,a5,a7
 .else
     unimp
 .endif
 
-.balign 4
+.balign 8
 0:
     // load 8 bytes at aligned source offset
     ld      a4,INV_N(a1)
