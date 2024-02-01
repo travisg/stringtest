@@ -22,8 +22,15 @@ static uint8_t *dst2;
 
 #define BUFFER_SIZE (64*1024*1024)
 #define TOTAL_TRANSFER_SIZE (256*1024*1024) // target transfer size per benchmark
-#define MAX_ITERATIONS_MEMCPY (100000) // when computing the number of benchmark iterations, dont run more than this
-#define MAX_ITERATIONS_MEMSET (100000) // when computing the number of benchmark iterations, dont run more than this
+#define MAX_ITERATIONS_MEMCPY (1000000) // when computing the number of benchmark iterations, dont run more than this
+#define MAX_ITERATIONS_MEMSET (1000000) // when computing the number of benchmark iterations, dont run more than this
+
+// X86 machines are usually faster, so run more iterations
+#ifdef __x86_64__
+#define ITER_MUL 10
+#else
+#define ITER_MUL 1
+#endif
 
 #define __NO_INLINE __attribute__((noinline))
 
@@ -49,9 +56,7 @@ static my_time_t current_time() {
 }
 
 // print bytes/sec in a human readable form
-static const char *bytes_per_sec(uint64_t bytes, my_time_t t) {
-    static char strbuf[128];
-
+static const char *bytes_per_sec(char *inbuf, size_t inbuf_len, uint64_t bytes, my_time_t t) {
     if (t == 0) {
         t = 1;
     }
@@ -59,13 +64,13 @@ static const char *bytes_per_sec(uint64_t bytes, my_time_t t) {
     uint64_t temp = bytes * 1000000000ULL / t;
 
     if (temp > 1024*1024*1024) {
-        snprintf(strbuf, sizeof(strbuf), "%.3f GB/sec", (double)temp / (1024*1024*1024));
+        snprintf(inbuf, inbuf_len, "%.3f GB/sec", (double)temp / (1024*1024*1024));
     } else if (temp > 1024*1024) {
-        snprintf(strbuf, sizeof(strbuf), "%.3f MB/sec", (double)temp / (1024*1024));
+        snprintf(inbuf, inbuf_len, "%.3f MB/sec", (double)temp / (1024*1024));
     } else {
-        snprintf(strbuf, sizeof(strbuf), "%" PRIu64 " bytes/sec", temp);
+        snprintf(inbuf, inbuf_len, "%" PRIu64 " bytes/sec", temp);
     }
-    return strbuf;
+    return inbuf;
 }
 
 /* reference implementations of memmove/memcpy */
@@ -126,12 +131,19 @@ static void bench_memcpy(void) {
 
     printf("memcpy speed test\n");
 
+    printf("%-10s%-10s%-10s%-10s%-20s%-20s%-20s%-20s%-20s%-20s%-20s\n",
+            "srcalign", "dstalign", "size", "iters",
+            "null ns",
+            "c ns", "c speed",
+            "libc ns", "libc speed",
+            "asm ns", "asm speed");
+
     for (srcalign = 0; srcalign < 64; ) {
         for (dstalign = 0; dstalign < 64; ) {
             for (size_t size = 1; size <= BUFFER_SIZE; size <<=1) {
                 size_t iterations = TOTAL_TRANSFER_SIZE / size;
-                if (iterations > MAX_ITERATIONS_MEMCPY) {
-                    iterations = MAX_ITERATIONS_MEMCPY;
+                if (iterations > MAX_ITERATIONS_MEMCPY * ITER_MUL) {
+                    iterations = MAX_ITERATIONS_MEMCPY * ITER_MUL;
                 }
 
                 null = bench_memcpy_routine(&null_memcpy, srcalign, dstalign, size, iterations);
@@ -139,12 +151,18 @@ static void bench_memcpy(void) {
                 libc = bench_memcpy_routine(&memcpy, srcalign, dstalign, size, iterations);
                 mine = bench_memcpy_routine(&mymemcpy, srcalign, dstalign, size, iterations);
 
-                printf("srcalign %zu, dstalign %zu, size %zu, iter %zu: ", srcalign, dstalign, size, iterations);
-                printf("null (overhead) %" PRIu64 " ns; ", null);
-                printf("c memcpy %" PRIu64 " ns, %s; ", c - null, bytes_per_sec(size * iterations, c - null));
-                printf("libc memcpy %" PRIu64 "  ns, %s; ", libc - null, bytes_per_sec(size * iterations, libc - null));
-                printf("my memcpy %" PRIu64 " ns, %s; ", mine - null, bytes_per_sec(size * iterations, mine - null));
-                printf("\n");
+                char buf0[20], buf1[20], buf2[20];
+                printf(
+                       "%-10zu%-10zu%-10zu%-10zu"
+                       "%-20" PRIu64
+                       "%-20" PRIu64 "%-20s"
+                       "%-20" PRIu64 "%-20s"
+                       "%-20" PRIu64 "%-20s\n",
+                       srcalign, dstalign, size, iterations,
+                       null,
+                       c - null, bytes_per_sec(buf0, sizeof(buf0), size * iterations, c - null),
+                       libc - null, bytes_per_sec(buf1, sizeof(buf1), size * iterations, libc - null),
+                       mine - null, bytes_per_sec(buf2, sizeof(buf2), size * iterations, mine - null));
             }
 
             if (dstalign < 8)
@@ -248,10 +266,17 @@ static void bench_memset(void) {
     printf("memset speed test\n");
 
     for (dstalign = 0; dstalign < maxalign;) {
+        printf("%-10s%-10s%-10s%-20s%-20s%-20s%-20s%-20s%-20s%-20s\n",
+                "dstalign", "size", "iters",
+                "null ns",
+                "c ns", "c speed",
+                "libc ns", "libc speed",
+                "asm ns", "asm speed");
+
         for (size = 1; size <= BUFFER_SIZE; size <<=1) {
             size_t iterations = TOTAL_TRANSFER_SIZE / size;
-            if (iterations > MAX_ITERATIONS_MEMSET) {
-                iterations = MAX_ITERATIONS_MEMSET;
+            if (iterations > MAX_ITERATIONS_MEMSET * ITER_MUL) {
+                iterations = MAX_ITERATIONS_MEMSET * ITER_MUL;
             }
 
             /* compute the overhead of the benchmark routine by calling a null function. Take
@@ -269,12 +294,18 @@ static void bench_memset(void) {
             libc = bench_memset_routine(&memset, dstalign, size, iterations);
             mine = bench_memset_routine(&mymemset, dstalign, size, iterations);
 
-            printf("dstalign %zu size %zu (iter %zu): ", dstalign, size, iterations);
-            printf("null (overhead) %" PRIu64 " ns; ", null);
-            printf("c memset %" PRIu64 " ns, %s; ", c - null, bytes_per_sec(size * iterations, c - null));
-            printf("libc memset %" PRIu64 " ns, %s; ", libc - null, bytes_per_sec(size * iterations, libc - null));
-            printf("my memset %" PRIu64 " ns, %s; ", mine - null, bytes_per_sec(size * iterations, mine - null));
-            printf("\n");
+            char buf0[20], buf1[20], buf2[20];
+            printf(
+                   "%-10zu%-10zu%-10zu"
+                   "%-20" PRIu64
+                   "%-20" PRIu64 "%-20s"
+                   "%-20" PRIu64 "%-20s"
+                   "%-20" PRIu64 "%-20s\n",
+                   dstalign, size, iterations,
+                   null,
+                   c - null, bytes_per_sec(buf0, sizeof(buf0), size * iterations, c - null),
+                   libc - null, bytes_per_sec(buf1, sizeof(buf1), size * iterations, libc - null),
+                   mine - null, bytes_per_sec(buf2, sizeof(buf2), size * iterations, mine - null));
         }
         if (dstalign < 8)
             dstalign++;
