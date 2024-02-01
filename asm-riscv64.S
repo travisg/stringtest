@@ -68,9 +68,11 @@ mymemset_asm:
     bne     a4,a3,0b
 
 .Lmemset_64byte:
+    // if the write is a zero, skip expanding it
+    beqz    a1,1f
+
     // expand the char out into an entire register
     // TODO: see if multiplying by 0x1010101010101010 is faster
-    // TODO: possibly add special case for 0
     slli    a5,a1,8
     add     a1,a5,a1
     slli    a5,a1,16
@@ -78,6 +80,7 @@ mymemset_asm:
     slli    a5,a1,32
     add     a1,a5,a1
 
+1:
     // compute the number of 64 byte sets
     srli    a4,a2,6
     beqz    a4,.Lmemset_8byte
@@ -85,7 +88,8 @@ mymemset_asm:
     slli    a4,a4,6
     add     a4,a3,a4
 
-.balign 4
+    // core loop, write 64 bytes at a time
+.balign 8
 0:
     sd      a1,(a3)
     sd      a1,8(a3)
@@ -111,7 +115,7 @@ mymemset_asm:
     slli    a4,a4,3
     add     a4,a3,a4
 
-    // copy 8 bytes at a time
+    // write 8 bytes at a time
 .balign 4
 0:
     sd      a1,(a3)
@@ -175,8 +179,8 @@ mymemcpy_asm:
 
     // bytewise copy until we hit this 8 byte aligned dest address
 0:
-    addi    a0,a0,1
     lbu     a4,0(a1)
+    addi    a0,a0,1
     addi    a1,a1,1
     sb      a4,-1(a0)
     bne     a0,a3,0b
@@ -226,16 +230,20 @@ mymemcpy_asm:
     srli    a3,a2,3
     beqz    a3,.Lmemcpy_bytewise
     // compute the last source address of a run of these sets
+#ifdef __riscv_zba
+    sh3add  a3,a3,a1
+#else
     slli    a3,a3,3
     add     a3,a3,a1
+#endif
 
     // copy 8 bytes at a time, testing for terminal source address
 .balign 4
 0:
     ld      a4,0(a1)
-    addi    a1,a1,8
-    sd      a4,0(a0)
     addi    a0,a0,8
+    addi    a1,a1,8
+    sd      a4,-8(a0)
     bne     a1,a3,0b
 
     // mask off the bottom 3 bits of a2 for any residual copies
@@ -246,17 +254,17 @@ mymemcpy_asm:
     // compute the terminal source address
     add     a3,a1,a2
 
-.balign 16 // align the loop to 16 bytes to try to maximize the chance of getting
-           // it entirely within a cache line
     // copy one byte at a time, testing for terminal source address
+.balign 4
 0:
     lbu     a4,0(a1)
-    addi    a1,a1,1
-    sb      a4,0(a0)
     addi    a0,a0,1
+    addi    a1,a1,1
+    sb      a4,-1(a0)
     bne     a1,a3,0b
 
 .Lmemcpy_exit:
+    // we saved the original dest in t6 at the start, restore it here
     mv      a0,t6
     ret
 
@@ -270,8 +278,12 @@ mymemcpy_asm:
     beqz    a3,.Lmemcpy_bytewise
 
     // compute the last source address (a3) of a run of these sets
+#ifdef __riscv_zba
+    sh3add  a3,a3,a1
+#else
     slli    a3,a3,3
     add     a3,a3,a1
+#endif
 
     // mask off the bottom 3 bits of length (a2) for any residual copies
     andi    a2,a2,7
@@ -279,14 +291,15 @@ mymemcpy_asm:
     // compute how much the source is misaligned
     andi    a4,a1,7
 
-    // rebase to 0-6
-    addi    a4,a4,-1
-
     // use a quick delta jump table to get to one of the 7 alignment handlers
     lla     a5,.Lmemcpy_misaligned_table
+#ifdef __riscv_zba
+    sh2add  a6,a4,a5
+#else
     slli    a4,a4,2
     add     a6,a5,a4
-    lwu     a4,0(a6)
+#endif
+    lwu     a4,-4(a6) // -4 offset to account for the 0 based table
     add     a5,a5,a4
     jr      a5
 
