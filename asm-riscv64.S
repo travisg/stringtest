@@ -85,17 +85,21 @@ mymemset_asm:
     add     a4,a3,a4
 
     // core loop, write 64 bytes at a time
+    // use two base registers, 32 bytes apart, to keep the comparison at the end
+    // of the loop far away from the addition.
+    addi    a5,a3,32
 .balign 8
 0:
     sd      a1,(a3)
     sd      a1,8(a3)
     sd      a1,16(a3)
     sd      a1,24(a3)
-    sd      a1,32(a3)
-    sd      a1,40(a3)
-    sd      a1,48(a3)
-    sd      a1,56(a3)
     addi    a3,a3,64
+    sd      a1,0(a5)
+    sd      a1,8(a5)
+    sd      a1,16(a5)
+    sd      a1,24(a5)
+    addi    a5,a5,64
     bne     a4,a3,0b
 
     // mask off the bottom 6 bits of a2 for any residual copies
