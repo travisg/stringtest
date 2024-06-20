@@ -51,7 +51,7 @@ OBJS := \
 OBJS := $(addprefix $(BUILDDIR)/,$(OBJS))
 DEPS := $(OBJS:.o=.d)
 
-.PHONY: all
+.PHONY: all clean spotless test
 all: $(BUILDDIR)/$(TARGET) $(BUILDDIR)/$(TARGET).lst
 
 $(BUILDDIR)/$(TARGET): $(OBJS)
@@ -71,6 +71,9 @@ clean:
 
 spotless:
 	rm -rf build-*
+
+test: $(BUILDDIR)/$(TARGET)
+	$(BUILDDIR)/$(TARGET) -v -c -s
 
 # makes sure the target dir exists
 MKDIR = if [ ! -d $(dir $@) ]; then mkdir -p $(dir $@); fi
