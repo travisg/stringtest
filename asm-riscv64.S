@@ -167,23 +167,18 @@ mymemcpy_asm:
     andi    a3,a0,7
     beqz    a3,.Lmemcpy_dest_aligned
 
-    // copy bytes up until dest is 8 byte aligned
-
-    // compute the next 8 byte aligned address at dest
-    andi    a3,a0,-8
-    addi    a3,a3,8
-
-    // subtract the amount of bytes we're about to set from overall length
-    sub     a4,a3,a0
-    sub     a2,a2,a4
-
-    // bytewise copy until we hit this 8 byte aligned dest address
+    // copy bytes until dest is 8 byte aligned
 0:
     lbu     a4,0(a1)
     addi    a0,a0,1
     addi    a1,a1,1
+    andi    a3,a0,7
     sb      a4,-1(a0)
-    bne     a0,a3,0b
+    bnez    a3,0b
+
+    // subtract the amount of bytes we just zeroed from the overall length
+    sub     a3,a0,t6
+    sub     a2,a2,a3
 
 .Lmemcpy_dest_aligned:
     // see if the source is 8 byte aligned, dest is already 8 byte aligned
