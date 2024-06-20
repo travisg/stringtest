@@ -32,6 +32,14 @@ CC := cc
 CPLUSPLUS := c++
 OBJDUMP := objdump
 LDLIBS +=
+
+ifeq ($(ARCH),riscv64)
+# try to tweak for a sifive u74 (visionfive 2)
+COMPILEFLAGS += -mtune=sifive-u74 -march=rv64gc_zba_zbb
+# try to tweak for a spacemit-k60 (banana pi f3)
+#COMPILEFLAGS += -mtune=sifive-u74 -march=rv64gcv_zba_zbb_zbc_zbs
+endif
+
 endif
 NOECHO ?= @
 

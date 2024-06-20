@@ -52,20 +52,16 @@ mymemset_asm:
     beqz    a4,.Lmemset_64byte
 
     // memset up to the 8 byte alignment
-
-    // compute the last dest address
-    andi    a4,a3,-8
-    addi    a4,a4,8
-
-    // subtract the amount of bytes we're about to set from overall length
-    sub     a5,a4,a3
-    sub     a2,a2,a5
-
 .balign 4
 0:
     sb      a1,(a3)
     addi    a3,a3,1
-    bne     a4,a3,0b
+    andi    a4,a3,7
+    bnez    a4,0b
+
+    // subtract the amount of bytes we just zeroed from the overall length
+    sub     a4,a3,a0
+    sub     a2,a2,a4
 
 .Lmemset_64byte:
     // if the write is a zero, skip expanding it
