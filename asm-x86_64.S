@@ -5,6 +5,7 @@
  * license that can be found in the LICENSE file or at
  * https://opensource.org/licenses/MIT
  */
+.section .note.GNU-stack,"",@progbits
 .text
 
 // Simple memset and memcpy routines that use rep stosb

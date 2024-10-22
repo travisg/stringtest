@@ -20,6 +20,7 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
+.section .note.GNU-stack,"",@progbits
 .text
 
 // A reasonably fast memset routine for 64bit RISC-V
