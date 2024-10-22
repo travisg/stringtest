@@ -50,7 +50,7 @@ static my_time_t current_time() {
 
     clock_gettime(CLOCK_MONOTONIC, &tv);
 
-    uint64_t res = tv.tv_nsec + tv.tv_sec * 1000000000;
+    uint64_t res = tv.tv_nsec + tv.tv_sec * (uint64_t)1000000000;
 
     return res;
 }
