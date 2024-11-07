@@ -38,9 +38,11 @@ static uint8_t *dst2;
 extern void *mymemcpy_c(void *dst, const void *src, size_t len);
 extern void *mymemset_c(void *dst, int c, size_t len);
 extern void *mymemcpy_asm(void *dst, const void *src, size_t len);
+extern void *mymemcpy_asm_vector(void *dst, const void *src, size_t len);
 extern void *mymemset_asm(void *dst, int c, size_t len);
-#define mymemcpy mymemcpy_asm
-#define mymemset mymemset_asm
+extern void *mymemset_asm_vector(void *dst, int c, size_t len);
+#define mymemcpy mymemcpy_asm_vector
+#define mymemset mymemset_asm_vector
 
 // 64bit nanoseconds
 typedef uint64_t my_time_t;
@@ -191,7 +193,7 @@ static void validate_memcpy(void) {
     size_t srcalign, dstalign, size;
     const size_t maxsrcalign = 64;
     const size_t maxdstalign = 64;
-    const size_t maxsize = 256;
+    const size_t maxsize = 512;
     size_t err_count = 0;
     const size_t max_err = 16;
 
@@ -319,7 +321,7 @@ static void validate_memset(void) {
     size_t dstalign, size;
     int c;
     const size_t maxalign = 64;
-    const size_t maxsize = 256;
+    const size_t maxsize = 512;
     size_t err_count = 0;
     const size_t max_err = 16;
 

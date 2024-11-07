@@ -394,4 +394,88 @@ memcpy_implement_misalign 5
 memcpy_implement_misalign 6
 memcpy_implement_misalign 7
 
+// memset using the riscv vector 1.0 extension
+.balign 32
+.globl mymemset_asm_vector
+mymemset_asm_vector:
+    // Save the original destination pointer
+    mv      t0, a0
+
+    // Zero length, we're done
+    beqz    a2, .Lmemset_vector_exit
+
+    // Mask off everything outside of the bottom byte
+    andi    a1, a1, 0xff
+
+// On a Banana Pi F3, using 2 registers per stride seems to be the best over all
+// of the set sizes.
+#define MEMSET_REGISTER_MASK m2
+
+    // Set up the vector configuration
+    // 8 byte elements, MEMSET_REGISTER_MASK width, and the maximum number of elements
+    vsetvli a3, a2, e8, MEMSET_REGISTER_MASK
+    // a3 == vl == number of bytes we can store in one loop
+
+    // Broadcast the byte value to all elements in the vector register
+    vmv.v.x v0, a1
+
+    // Inner loop, setting up to a3 bytes at a time
+.balign 4
+0:
+    vse8.v  v0, (a0)
+    add     a0, a0, a3
+    sub     a2, a2, a3
+    bgeu    a2, a3, 0b
+
+    // Are we done?
+    beqz    a2, .Lmemset_vector_exit
+
+    // One more partial register write for the remainder of the bytes
+    vsetvli zero, a2, e8, MEMSET_REGISTER_MASK
+    vse8.v  v0, (a0)
+
+.Lmemset_vector_exit:
+    // Restore the original destination pointer
+    mv      a0, t0
+    ret
+
+.balign 32
+.globl mymemcpy_asm_vector
+mymemcpy_asm_vector:
+    // Save the original destination pointer
+    mv      t0, a0
+
+    // Zero length, we're done
+    beqz    a2, .Lmemset_vector_exit
+
+// On a Banana Pi F3, using 2 registers per stride seems to be the best over all
+// of the copy sizes.
+#define MEMCPY_REGISTER_MASK m2
+
+    // Calculate the number of full vector registers to copy
+    vsetvli a3, a2, e8, MEMCPY_REGISTER_MASK  # Set vector length to 8-byte elements, LMUL=MEMCPY_REGISTER_MASK
+
+    // Loop to copy full vector registers
+.balign 4
+0:
+    vle8.v  v0, (a1)         // Load a vector from the source
+    vse8.v  v0, (a0)         // Store the vector to the destination
+    add     a0, a0, a3       // Increment source address
+    add     a1, a1, a3       // Increment destination address
+    sub     a2, a2, a3       // Decrement remaining size
+    bgeu    a2, a3, 0b       // Loop if there are more bytes to copy
+
+    // Are we done?
+    beqz    a2, .Lmemcpy_vector_exit
+
+    // Handle any remaining bytes (less than a full vector)
+    vsetvli zero, a2, e8, MEMCPY_REGISTER_MASK // Set vector length to remaining bytes, LMUL=MEMCPY_REGISTER_MASK
+    vle8.v  v0, (a1)         // Load remaining bytes from the source
+    vse8.v  v0, (a0)         // Store remaining bytes to the destination
+
+.Lmemcpy_vector_exit:
+    // Restore the original destination pointer
+    mv      a0, t0
+    ret
+
 // vim: ts=4:sw=4:expandtab:
