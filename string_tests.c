@@ -41,8 +41,26 @@ extern void *mymemcpy_asm(void *dst, const void *src, size_t len);
 extern void *mymemcpy_asm_vector(void *dst, const void *src, size_t len);
 extern void *mymemset_asm(void *dst, int c, size_t len);
 extern void *mymemset_asm_vector(void *dst, int c, size_t len);
+// routine the benchmarks run as the "mine" column
 #define mymemcpy mymemcpy_asm
 #define mymemset mymemset_asm
+
+// all of the implementations, each of which gets validated
+struct impl {
+    const char *name;
+    void *(*cpy)(void *, const void *, size_t);
+    void *(*set)(void *, int, size_t);
+};
+
+static const struct impl impls[] = {
+    { "c",          mymemcpy_c,          mymemset_c },
+    { "asm",        mymemcpy_asm,        mymemset_asm },
+#if defined(__riscv_vector)
+    { "asm_vector", mymemcpy_asm_vector, mymemset_asm_vector },
+#endif
+};
+
+#define countof(a) (sizeof(a) / sizeof((a)[0]))
 
 // 64bit nanoseconds
 typedef uint64_t my_time_t;
@@ -179,17 +197,72 @@ static void bench_memcpy(void) {
     }
 }
 
+// fill a buffer with a deterministic pseudo-random pattern (xorshift32).
+// the period is 2^32-1 bytes so nearby regions of the buffer never repeat,
+// which would mask copies from the wrong offset.
 static void fillbuf(void *ptr, size_t len, uint32_t seed) {
-    size_t i;
+    uint32_t state = seed ? seed : 1;
 
-    for (i = 0; i < len; i++) {
-        ((char *)ptr)[i] = seed;
-        seed *= 0x1234567;
+    for (size_t i = 0; i < len; i++) {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        ((char *)ptr)[i] = state;
     }
 }
 
+// bytes past the end of the destination that are filled and compared to catch
+// out of bounds writes
+#define VALIDATE_GUARD 64
+
+// large and odd sizes to spot check beyond the exhaustive small sweep
+static const size_t big_sizes[] = {
+    512, 1023, 1024, 1025, 4095, 4096, 4097, 65535, 65536, 65537,
+    1024*1024 - 1, 1024*1024, 1024*1024 + 3, 4*1024*1024 + 5,
+};
+static const size_t big_aligns[] = { 0, 1, 7, 8, 63 };
+
+// run a single memcpy case against libc, comparing the entire touched region
+// (including VALIDATE_GUARD bytes past the end) to catch out of bounds writes.
+// returns the number of errors found.
+static size_t validate_one_memcpy(const struct impl *imp, size_t srcalign, size_t dstalign, size_t size) {
+    const size_t region = dstalign + size + VALIDATE_GUARD;
+    size_t errs = 0;
+
+    // fill the source and destination buffers with different random patterns
+    fillbuf(src, srcalign + size, 567);
+    fillbuf(src2, srcalign + size, 567);
+    fillbuf(dst, region, 123514);
+    fillbuf(dst2, region, 123514);
+
+    // run the reference memcpy and memcpy under test on two separate source and dest buffers.
+    memcpy(dst + dstalign, src + srcalign, size);
+    void *res2 = imp->cpy(dst2 + dstalign, src2 + srcalign, size);
+
+    // compare the results
+    int comp = memcmp(dst, dst2, region);
+    if (comp != 0) {
+        printf("error! srcalign %zu, dstalign %zu, size %zu\n", srcalign, dstalign, size);
+
+        size_t shown = 0;
+        for (size_t i = 0; i < region && shown < 16; i++) {
+            if (dst[i] != dst2[i]) {
+                printf("%zu: %#hhx %#hhx\n", i, dst[i], dst2[i]);
+                shown++;
+            }
+        }
+
+        errs++;
+    }
+    if (res2 != dst2 + dstalign) {
+        printf("error: return is not destination! srcalign %zu, dstalign %zu, size %zu\n", srcalign, dstalign, size);
+        errs++;
+    }
+    return errs;
+}
+
 __NO_INLINE
-static void validate_memcpy(void) {
+static size_t validate_memcpy(const struct impl *imp) {
     size_t srcalign, dstalign, size;
     const size_t maxsrcalign = 64;
     const size_t maxdstalign = 64;
@@ -197,52 +270,40 @@ static void validate_memcpy(void) {
     size_t err_count = 0;
     const size_t max_err = 16;
 
-    printf("testing memcpy for correctness\n");
+    printf("testing %s memcpy for correctness\n", imp->name);
 
     /*
      * do the simple tests to make sure that memcpy doesn't color outside
      * the lines for all alignment cases
      */
-    printf("srcalign 0..%zu, dstalign 0..%zu, size 0..%zu\n", maxsrcalign, maxdstalign, maxsize);
+    printf("srcalign 0..%zu, dstalign 0..%zu, size 0..%zu\n", maxsrcalign - 1, maxdstalign - 1, maxsize - 1);
     for (srcalign = 0; srcalign < maxsrcalign; srcalign++) {
-        //printf("srcalign %zu\n", srcalign);
         for (dstalign = 0; dstalign < maxdstalign; dstalign++) {
-            //printf("\tdstalign %zu\n", dstalign);
             for (size = 0; size < maxsize; size++) {
-
-                //printf("srcalign %zu, dstalign %zu, size %zu\n", srcalign, dstalign, size);
-
-                // fill the source and destination buffers with different random patterns
-                fillbuf(src, maxsize * 2, 567);
-                fillbuf(src2, maxsize * 2, 567);
-                fillbuf(dst, maxsize * 2, 123514);
-                fillbuf(dst2, maxsize * 2, 123514);
-
-                // run the reference memcpy and memcpy under test on two separate source and dest buffers.
-                memcpy(dst + dstalign, src + srcalign, size);
-                void *res2 = mymemcpy(dst2 + dstalign, src2 + srcalign, size);
-
-                // compare the results
-                int comp = memcmp(dst, dst2, maxsize * 2);
-                if (comp != 0) {
-                    printf("error! srcalign %zu, dstalign %zu, size %zu\n", srcalign, dstalign, size);
-
-                    for (size_t i = 0; i < size * 2; i++) {
-                        printf("%zu: %#hhx %#hhx %c\n", i, dst[i], dst2[i], (dst[i] != dst2[i]) ? '*' : ' ');
-                    }
-
-                    err_count++;
-                    if (err_count > max_err) {
-                        printf("aborting after %zu errors\n", max_err);
-                        return;
-                    }
-                }
-                if (res2 != dst2 + dstalign) {
-                    printf("error: return is not destination! srcalign %zu, dstalign %zu, size %zu\n", srcalign, dstalign, size);
+                err_count += validate_one_memcpy(imp, srcalign, dstalign, size);
+                if (err_count > max_err) {
+                    printf("aborting after %zu errors\n", err_count);
+                    return err_count;
                 }
             }
         }
     }
+
+    // spot check large and odd sizes at a reduced set of alignments
+    printf("large sizes up to %zu\n", big_sizes[countof(big_sizes) - 1]);
+    for (size_t s = 0; s < countof(big_aligns); s++) {
+        for (size_t d = 0; d < countof(big_aligns); d++) {
+            for (size_t i = 0; i < countof(big_sizes); i++) {
+                err_count += validate_one_memcpy(imp, big_aligns[s], big_aligns[d], big_sizes[i]);
+                if (err_count > max_err) {
+                    printf("aborting after %zu errors\n", err_count);
+                    return err_count;
+                }
+            }
+        }
+    }
+
+    return err_count;
 }
 
 __NO_INLINE
@@ -316,8 +377,42 @@ static void bench_memset(void) {
     }
 }
 
+// run a single memset case against libc, comparing the entire touched region
+// (including VALIDATE_GUARD bytes past the end) to catch out of bounds writes.
+// returns the number of errors found.
+static size_t validate_one_memset(const struct impl *imp, size_t dstalign, int c, size_t size) {
+    const size_t region = dstalign + size + VALIDATE_GUARD;
+    size_t errs = 0;
+
+    fillbuf(dst, region, 123514);
+    fillbuf(dst2, region, 123514);
+
+    memset(dst + dstalign, c, size);
+    void *res2 = imp->set(dst2 + dstalign, c, size);
+
+    int comp = memcmp(dst, dst2, region);
+    if (comp != 0) {
+        printf("error! align %zu, c 0x%x, size %zu\n", dstalign, c, size);
+
+        size_t shown = 0;
+        for (size_t i = 0; i < region && shown < 16; i++) {
+            if (dst[i] != dst2[i]) {
+                printf("%zu: %#hhx %#hhx\n", i, dst[i], dst2[i]);
+                shown++;
+            }
+        }
+
+        errs++;
+    }
+    if (res2 != dst2 + dstalign) {
+        printf("error: return is not destination! align %zu, c 0x%x, size %zu\n", dstalign, c, size);
+        errs++;
+    }
+    return errs;
+}
+
 __NO_INLINE
-static void validate_memset(void) {
+static size_t validate_memset(const struct impl *imp) {
     size_t dstalign, size;
     int c;
     const size_t maxalign = 64;
@@ -325,39 +420,39 @@ static void validate_memset(void) {
     size_t err_count = 0;
     const size_t max_err = 16;
 
-    printf("testing memset for correctness\n");
+    printf("testing %s memset for correctness\n", imp->name);
 
-    printf("align 0..%zu, size 0...%zu\n", maxalign, maxsize);
+    printf("align 0..%zu, size 0..%zu\n", maxalign - 1, maxsize - 1);
     for (dstalign = 0; dstalign < maxalign; dstalign++) {
-        //printf("\talign %zd, size 0...%zu\n", dstalign, maxsize);
         for (size = 0; size < maxsize; size++) {
-            //printf("\t\talign %zd, size %zu\n", dstalign, size);
             for (c = -1; c < 257; c++) {
-                //printf("\t\t\talign %zd, size %zu, c %d\n", dstalign, size, c);
-
-                fillbuf(dst, maxsize * 2, 123514);
-                fillbuf(dst2, maxsize * 2, 123514);
-
-                memset(dst + dstalign, c, size);
-                mymemset(dst2 + dstalign, c, size);
-
-                int comp = memcmp(dst, dst2, maxsize * 2);
-                if (comp != 0) {
-                    printf("error! align %zu, c 0x%x, size %zu\n", dstalign, c, size);
-
-                    for (size_t i = 0; i < size; i++) {
-                        printf("%zu: %#hhx %#hhx\n", i, dst[i], dst2[i]);
-                    }
-
-                    err_count++;
-                    if (err_count > max_err) {
-                        printf("aborting after %zu errors\n", max_err);
-                        return;
-                    }
+                err_count += validate_one_memset(imp, dstalign, c, size);
+                if (err_count > max_err) {
+                    printf("aborting after %zu errors\n", err_count);
+                    return err_count;
                 }
             }
         }
     }
+
+    // spot check large and odd sizes at a reduced set of alignments.
+    // 0 matters because some implementations have a zero fast path,
+    // 256 tests truncation to a byte.
+    static const int big_cvals[] = { 0, 0xa5, 256 };
+    printf("large sizes up to %zu\n", big_sizes[countof(big_sizes) - 1]);
+    for (size_t d = 0; d < countof(big_aligns); d++) {
+        for (size_t i = 0; i < countof(big_sizes); i++) {
+            for (size_t v = 0; v < countof(big_cvals); v++) {
+                err_count += validate_one_memset(imp, big_aligns[d], big_cvals[v], big_sizes[i]);
+                if (err_count > max_err) {
+                    printf("aborting after %zu errors\n", err_count);
+                    return err_count;
+                }
+            }
+        }
+    }
+
+    return err_count;
 }
 
 static void usage(char **argv) {
@@ -422,12 +517,15 @@ int main(int argc, char **argv) {
         usage(argv);
     }
 
+    int ret = 0;
+
     src = memalign(64, BUFFER_SIZE + 256);
     dst = memalign(64, BUFFER_SIZE + 256);
     src2 = memalign(64, BUFFER_SIZE + 256);
     dst2 = memalign(64, BUFFER_SIZE + 256);
     if (!src || !dst || !src2 || !dst2) {
         printf("failed to allocate all the buffers\n");
+        ret = 1;
         goto out;
     }
 
@@ -439,11 +537,18 @@ int main(int argc, char **argv) {
 
     // run various permutations of validations and benchmarks
     if (do_validate) {
-        if (do_memset) {
-            validate_memset();
+        size_t errs = 0;
+        for (size_t i = 0; i < countof(impls); i++) {
+            if (do_memset) {
+                errs += validate_memset(&impls[i]);
+            }
+            if (do_memcpy) {
+                errs += validate_memcpy(&impls[i]);
+            }
         }
-        if (do_memcpy) {
-            validate_memcpy();
+        if (errs > 0) {
+            printf("validation failed with %zu errors\n", errs);
+            ret = 1;
         }
     }
     if (do_bench) {
@@ -461,7 +566,7 @@ out:
     free(src2);
     free(dst2);
 
-    return 0;
+    return ret;
 }
 
 // vim: ts=4:sw=4:expandtab:
