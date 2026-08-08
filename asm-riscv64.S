@@ -86,21 +86,17 @@ mymemset_asm:
     add     a4,a3,a4
 
     // core loop, write 64 bytes at a time
-    // use two base registers, 32 bytes apart, to keep the comparison at the end
-    // of the loop far away from the addition.
-    addi    a5,a3,32
 .balign 8
 0:
-    sd      a1,(a3)
+    sd      a1,0(a3)
     sd      a1,8(a3)
     sd      a1,16(a3)
     sd      a1,24(a3)
+    sd      a1,32(a3)
+    sd      a1,40(a3)
+    sd      a1,48(a3)
+    sd      a1,56(a3)
     addi    a3,a3,64
-    sd      a1,0(a5)
-    sd      a1,8(a5)
-    sd      a1,16(a5)
-    sd      a1,24(a5)
-    addi    a5,a5,64
     bne     a4,a3,0b
 
     // mask off the bottom 6 bits of a2 for any residual copies
@@ -108,21 +104,29 @@ mymemset_asm:
     beqz    a2,.Lmemset_exit
 
 .Lmemset_8byte:
-    // compute the number of 8 byte sets
-    srli    a4,a2,3
-    beqz    a4,.Lmemset_bytewise
-
-    // compute the last address of a run of 8 byte sets
-    slli    a4,a4,3
-    add     a4,a3,a4
-
-    // write 8 bytes at a time
-.balign 4
-0:
-    sd      a1,(a3)
+    // unrolled 8 byte set logic to avoid a loop for < 64 bytes
+    // check for 32 bytes
+    andi    a4,a2,32
+    beqz    a4,1f
+    sd      a1,0(a3)
+    sd      a1,8(a3)
+    sd      a1,16(a3)
+    sd      a1,24(a3)
+    addi    a3,a3,32
+1:
+    // check for 16 bytes
+    andi    a4,a2,16
+    beqz    a4,2f
+    sd      a1,0(a3)
+    sd      a1,8(a3)
+    addi    a3,a3,16
+2:
+    // check for 8 bytes
+    andi    a4,a2,8
+    beqz    a4,3f
+    sd      a1,0(a3)
     addi    a3,a3,8
-    bne     a4,a3,0b
-
+3:
     // mask off the bottom 3 bits of a2 for any residual copies
     andi    a2,a2,7
     beqz    a2,.Lmemset_exit
@@ -394,6 +398,9 @@ memcpy_implement_misalign 5
 memcpy_implement_misalign 6
 memcpy_implement_misalign 7
 
+// conditionally build vectorized versions of memset and memcpy if the vector extension is present.
+#if __riscv_vector
+
 // memset using the riscv vector 1.0 extension
 .balign 32
 .globl mymemset_asm_vector
@@ -477,5 +484,7 @@ mymemcpy_asm_vector:
     // Restore the original destination pointer
     mv      a0, t0
     ret
+
+#endif // __riscv_vector
 
 // vim: ts=4:sw=4:expandtab:

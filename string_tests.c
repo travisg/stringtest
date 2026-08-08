@@ -41,8 +41,8 @@ extern void *mymemcpy_asm(void *dst, const void *src, size_t len);
 extern void *mymemcpy_asm_vector(void *dst, const void *src, size_t len);
 extern void *mymemset_asm(void *dst, int c, size_t len);
 extern void *mymemset_asm_vector(void *dst, int c, size_t len);
-#define mymemcpy mymemcpy_asm_vector
-#define mymemset mymemset_asm_vector
+#define mymemcpy mymemcpy_asm
+#define mymemset mymemset_asm
 
 // 64bit nanoseconds
 typedef uint64_t my_time_t;
