@@ -52,37 +52,43 @@ mymemset_asm:
     andi    a4,a3,7
     beqz    a4,.Lmemset_64byte
 
-    // memset up to the 8 byte alignment
+    // convert the misalignment into the number of bytes needed to reach
+    // 8 byte alignment, subtract it from the overall length, and compute
+    // the terminal dest address, then set bytes until it is reached
+    neg     a4,a4
+    andi    a4,a4,7
+    sub     a2,a2,a4
+    add     a4,a4,a3
 .balign 4
 0:
     sb      a1,(a3)
     addi    a3,a3,1
-    andi    a4,a3,7
-    bnez    a4,0b
-
-    // subtract the amount of bytes we just zeroed from the overall length
-    sub     a4,a3,a0
-    sub     a2,a2,a4
+    bne     a3,a4,0b
 
 .Lmemset_64byte:
     // if the write is a zero, skip expanding it
     beqz    a1,1f
 
     // expand the char out into an entire register
-    // TODO: see if multiplying by 0x1010101010101010 is faster
+    // (multiplying by 0x0101010101010101 is not faster: materializing the
+    // constant costs about as much as the shift/add chain)
+#ifdef __riscv_zbkb
+    packh   a1,a1,a1
+    packw   a1,a1,a1
+    pack    a1,a1,a1
+#else
     slli    a5,a1,8
     add     a1,a5,a1
     slli    a5,a1,16
     add     a1,a5,a1
     slli    a5,a1,32
     add     a1,a5,a1
+#endif
 
 1:
-    // compute the number of 64 byte sets
-    srli    a4,a2,6
+    // compute the terminal address of a run of 64 byte sets
+    andi    a4,a2,-64
     beqz    a4,.Lmemset_8byte
-    // compute the last address of a run of these sets
-    slli    a4,a4,6
     add     a4,a3,a4
 
     // core loop, write 64 bytes at a time
@@ -172,18 +178,20 @@ mymemcpy_asm:
     andi    a3,a0,7
     beqz    a3,.Lmemcpy_dest_aligned
 
-    // copy bytes until dest is 8 byte aligned
+    // convert the misalignment into the number of bytes needed to reach
+    // 8 byte alignment, subtract it from the overall length, and compute
+    // the terminal dest address, then copy bytes until it is reached
+    neg     a3,a3
+    andi    a3,a3,7
+    sub     a2,a2,a3
+    add     a3,a3,a0
+.balign 4
 0:
     lbu     a4,0(a1)
     addi    a0,a0,1
     addi    a1,a1,1
-    andi    a3,a0,7
     sb      a4,-1(a0)
-    bnez    a3,0b
-
-    // subtract the amount of bytes we just zeroed from the overall length
-    sub     a3,a0,t6
-    sub     a2,a2,a3
+    bne     a0,a3,0b
 
 .Lmemcpy_dest_aligned:
     // see if the source is 8 byte aligned, dest is already 8 byte aligned
@@ -191,11 +199,9 @@ mymemcpy_asm:
     bnez    a3,.Lmemcpy_misaligned // give up for now if they're not aligned
 
 .Lmemcpy_64byte:
-    // compute the number of 64 byte copies
-    srli    a3,a2,6
+    // compute the terminal source address of a run of 64 byte copies
+    andi    a3,a2,-64
     beqz    a3,.Lmemcpy_8byte
-    // compute the last source address of a run of these sets
-    slli    a3,a3,6
     add     a3,a3,a1
 
     // copy 64 bytes at a time
@@ -226,16 +232,10 @@ mymemcpy_asm:
     beqz    a2,.Lmemcpy_exit
 
 .Lmemcpy_8byte:
-    // compute the number of 8 byte copies
-    srli    a3,a2,3
+    // compute the terminal source address of a run of 8 byte copies
+    andi    a3,a2,-8
     beqz    a3,.Lmemcpy_bytewise
-    // compute the last source address of a run of these sets
-#ifdef __riscv_zba
-    sh3add  a3,a3,a1
-#else
-    slli    a3,a3,3
     add     a3,a3,a1
-#endif
 
     // copy 8 bytes at a time, testing for terminal source address
 .balign 4
@@ -269,27 +269,24 @@ mymemcpy_asm:
     ret
 
     // deal with misaligned source. State at this point:
-    // source (a0) is misaligned by 1-7 bytes
-    // destination (a1) is 8 byte aligned
-    // length (a2) is at least 8 bytes
+    // destination (a0) is 8 byte aligned
+    // source (a1) is misaligned by 1-7 bytes
+    // length (a2) is at least 9 bytes
 .Lmemcpy_misaligned:
-    // compute the number of 8 byte copies we'll make below
-    srli    a3,a2,3
-    beqz    a3,.Lmemcpy_bytewise
-
-    // compute the last source address (a3) of a run of these sets
-#ifdef __riscv_zba
-    sh3add  a3,a3,a1
-#else
-    slli    a3,a3,3
+    // compute the terminal source address (a3) of a run of 8 byte copies
+    andi    a3,a2,-8
     add     a3,a3,a1
-#endif
+
+    // compute how much the source is misaligned
+    andi    a4,a1,7
 
     // mask off the bottom 3 bits of length (a2) for any residual copies
     andi    a2,a2,7
 
-    // compute how much the source is misaligned
-    andi    a4,a1,7
+    // Note: the final pass of the 8 byte loops below may read up to 7 bytes
+    // past the last byte it consumes, but the load is 8 byte aligned and
+    // always contains at least one in-bounds byte, so it stays within the
+    // last aligned word of the buffer and cannot fault.
 
     // use a quick delta jump table to get to one of the 7 alignment handlers
     lla     a5,.Lmemcpy_misaligned_table
@@ -368,16 +365,14 @@ memcpy_misaligned_\n:
     ld      a4,INV_N(a1)
     addi    a1,a1,8
 
-    // shift out the extra source data to a temporary spot (a6),
-    // or in the new residual data (a5),
-    // save the temporary data (a6) to the residual slot (a5)
-    srli    a6,a4,N_8
-    slli    a4,a4,INV_N_8
-    or      a4,a4,a5
-    mv      a5,a6
+    // merge the bottom of the new data (a4) with the residual (a5),
+    // then replace the residual with the top of the new data
+    slli    a6,a4,INV_N_8
+    or      a6,a6,a5
+    srli    a5,a4,N_8
 
     // store the destination data
-    sd      a4,0(a0)
+    sd      a6,0(a0)
     addi    a0,a0,8
 
     // test for terminal source address and loop
