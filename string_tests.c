@@ -34,6 +34,9 @@ static uint8_t *dst2;
 
 #define __NO_INLINE __attribute__((noinline))
 
+// whether or not to include the C version of the routines in a benchmark run
+#define BENCH_C 0
+
 // if we're testing our own memcpy, use this
 extern void *mymemcpy_c(void *dst, const void *src, size_t len);
 extern void *mymemset_c(void *dst, int c, size_t len);
@@ -146,15 +149,24 @@ static my_time_t bench_memcpy_routine(void *memcpy_routine(void *, const void *,
 
 __NO_INLINE
 static void bench_memcpy(void) {
-    my_time_t null, c, libc, mine;
+    my_time_t null, libc, mine;
+#if BENCH_C
+    my_time_t c;
+#endif
     size_t srcalign, dstalign;
 
     printf("memcpy speed test\n");
 
-    printf("%-10s%-10s%-10s%-10s%-20s%-20s%-20s%-20s%-20s%-20s%-20s\n",
+    printf("%-10s%-10s%-10s%-10s%-20s"
+#if BENCH_C
+            "%-20s%-20s"
+#endif
+            "%-20s%-20s%-20s%-20s\n",
             "srcalign", "dstalign", "size", "iters",
             "null ns",
+#if BENCH_C
             "c ns", "c speed",
+#endif
             "libc ns", "libc speed",
             "asm ns", "asm speed");
 
@@ -167,20 +179,29 @@ static void bench_memcpy(void) {
                 }
 
                 null = bench_memcpy_routine(&null_memcpy, srcalign, dstalign, size, iterations);
+#if BENCH_C
                 c = bench_memcpy_routine(&c_memcpy, srcalign, dstalign, size, iterations);
+#endif
                 libc = bench_memcpy_routine(&memcpy, srcalign, dstalign, size, iterations);
                 mine = bench_memcpy_routine(&mymemcpy, srcalign, dstalign, size, iterations);
 
-                char buf0[20], buf1[20], buf2[20];
+#if BENCH_C
+                char buf0[20];
+#endif
+                char buf1[20], buf2[20];
                 printf(
                        "%-10zu%-10zu%-10zu%-10zu"
                        "%-20" PRIu64
+#if BENCH_C
                        "%-20" PRIu64 "%-20s"
+#endif
                        "%-20" PRIu64 "%-20s"
                        "%-20" PRIu64 "%-20s\n",
                        srcalign, dstalign, size, iterations,
                        null,
+#if BENCH_C
                        c - null, bytes_per_sec(buf0, sizeof(buf0), size * iterations, c - null),
+#endif
                        libc - null, bytes_per_sec(buf1, sizeof(buf1), size * iterations, libc - null),
                        mine - null, bytes_per_sec(buf2, sizeof(buf2), size * iterations, mine - null));
             }
@@ -321,7 +342,10 @@ static my_time_t bench_memset_routine(void *memset_routine(void *, int, size_t),
 
 __NO_INLINE
 static void bench_memset(void) {
-    my_time_t null, c, libc, mine;
+    my_time_t null, libc, mine;
+#if BENCH_C
+    my_time_t c;
+#endif
     size_t dstalign;
     size_t size;
     const size_t maxalign = 64;
@@ -329,10 +353,16 @@ static void bench_memset(void) {
     printf("memset speed test\n");
 
     for (dstalign = 0; dstalign < maxalign;) {
-        printf("%-10s%-10s%-10s%-20s%-20s%-20s%-20s%-20s%-20s%-20s\n",
+        printf("%-10s%-10s%-10s%-20s"
+#if BENCH_C
+                "%-20s%-20s"
+#endif
+                "%-20s%-20s%-20s%-20s\n",
                 "dstalign", "size", "iters",
                 "null ns",
+#if BENCH_C
                 "c ns", "c speed",
+#endif
                 "libc ns", "libc speed",
                 "asm ns", "asm speed");
 
@@ -353,20 +383,29 @@ static void bench_memset(void) {
                     null = n;
                 }
             }
+#if BENCH_C
             c = bench_memset_routine(&c_memset, dstalign, size, iterations);
+#endif
             libc = bench_memset_routine(&memset, dstalign, size, iterations);
             mine = bench_memset_routine(&mymemset, dstalign, size, iterations);
 
-            char buf0[20], buf1[20], buf2[20];
+#if BENCH_C
+            char buf0[20];
+#endif
+            char buf1[20], buf2[20];
             printf(
                    "%-10zu%-10zu%-10zu"
                    "%-20" PRIu64
+#if BENCH_C
                    "%-20" PRIu64 "%-20s"
+#endif
                    "%-20" PRIu64 "%-20s"
                    "%-20" PRIu64 "%-20s\n",
                    dstalign, size, iterations,
                    null,
+#if BENCH_C
                    c - null, bytes_per_sec(buf0, sizeof(buf0), size * iterations, c - null),
+#endif
                    libc - null, bytes_per_sec(buf1, sizeof(buf1), size * iterations, libc - null),
                    mine - null, bytes_per_sec(buf2, sizeof(buf2), size * iterations, mine - null));
         }
